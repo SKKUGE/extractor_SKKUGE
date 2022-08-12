@@ -1,0 +1,29 @@
+#20220314	
+D3_C1	KRAS_G12D_mutant_lib
+D3_C2	KRAS_G12D_mutant_lib
+D3_4	KRAS_G12D_mutant_lib
+D3_40	KRAS_G12D_mutant_lib
+D10_C1	KRAS_G12D_mutant_lib
+D10_C2	KRAS_G12D_mutant_lib
+D10_4	KRAS_G12D_mutant_lib
+D10_40	KRAS_G12D_mutant_lib
+D14_C1	KRAS_G12D_mutant_lib
+D14_40	KRAS_G12D_mutant_lib
+
+#20220517	
+1st_100	KRAS_G12D_mutant_lib
+
+#20220629	
+220218_con1-1_f1_f2	KRAS_G12D_mutant_lib
+220218_con1-1_f3	KRAS_G12D_mutant_lib
+220218_40uM_f1_f2	KRAS_G12D_mutant_lib
+220218_40uM_f3	KRAS_G12D_mutant_lib
+220228_con1-1_f1_f2	KRAS_G12D_mutant_lib
+220228_con1-1_f3	KRAS_G12D_mutant_lib
+220228_40uM_f1_f2	KRAS_G12D_mutant_lib
+220228_40uM_f3	KRAS_G12D_mutant_lib
+
+#20220727	
+Small_D9_Ctrl	KRAS_G12D_mutant_lib
+Small_D9_40	KRAS_G12D_mutant_lib
+Small_D9_100	KRAS_G12D_mutant_lib

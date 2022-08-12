@@ -470,3 +470,6 @@ Output/JU/KRAS/Log/2022_07_03_22_47_02_log.txt
 User/JU/JU_GFLAS_Cas9.txt
 User/JU/KRAS.txt
 User/KJY/KJY_As_and_T.txt
+
+*.fq
+*.fastq

@@ -39,7 +39,7 @@ def do(src_file_name, dest_file_name, sample_name):
     start_time = time.time()
 
     # 프로그램 진행율을 계산하기 위해 파일의 라인수를 센다.
-    src_line_cnt = count_line_in_file(src_file_name)
+    src_line_cnt = count_line_in_file(dest_file_name)
     if src_line_cnt == 0:
         print("File Not Found")
         raise
@@ -52,8 +52,8 @@ def do(src_file_name, dest_file_name, sample_name):
     if not os.path.exists(result_folder_name):
         os.makedirs(result_folder_name)
 
-    # 결과가 저장될 샘플 폴더 지정
-    result_sample_dir = os.path.join(result_folder_name, f"temp/{sample_name}")
+    # 결과가 저장될 샘플 폴더 지정 -- temp 폴더에 곧바로 저장
+    result_sample_dir = os.path.join(result_folder_name, f"temp/")
     if not os.path.exists(result_sample_dir):
         os.makedirs(result_sample_dir)
 
@@ -80,30 +80,44 @@ def do(src_file_name, dest_file_name, sample_name):
                 continue
             # 파일명에서 화이트 스페이스 삭제
             file_name = barcode_set[0].strip()
+            # src_aa, dst_aa = file_name.split(sep="_")[-2], file_name.split(sep="_")[
+            #     -1]  # Checking whether it is a WT barcode
+
             # 바코드가 valid한지 검증
             barcode = seq_validator(barcode_set[1].strip())
 
             used_data = []
             # 대상이 되는 시퀸스들을 하나하나 분석한다.
 
-            # debug
-            # line_cnt = 0
-
             num_detected = 0
 
+            another_mt_flag = False
             for line in data:
-                # 대상 시퀸스 valid 검증 -- duplicate
-                # line = seq_validator(line)
-                # if line is None:
-                #     continue
-
-                # debug
-                # flag = False
-                # worksheet.write(line_cnt, 0, line)
-
                 # 비교를 위해 바코드, 대상 시퀸스 둘다 소문자로 변환하여 바코드가 대상 시퀸스 내에 존재하는지 검사
                 if barcode.lower() in line.lower():
                     # processing buffer
+
+                    # if src_aa == dst_aa:
+                    #     # Full-sweep barcode chekcing
+                    #     for barcode_complex in barcode_data:
+                    #         try:
+                    #             deep_barcode = barcode_complex.split(':')[1].strip()
+                    #         except IndexError:
+                    #             continue  # Barcode file error (example: new line character)
+                    #
+                    #         another_mt_flag = False
+                    #         if deep_barcode == barcode:
+                    #             # same barcode, pass
+                    #             continue
+                    #         if deep_barcode.lower() in line.lower():
+                    #             # This line has another mutation, set the flag
+                    #             another_mt_flag = True
+                    #             break
+
+                    if another_mt_flag:
+                        # This line has another mutation, no count
+                        continue
+
                     used_data.append(line)
                     num_detected += 1
 
@@ -113,16 +127,17 @@ def do(src_file_name, dest_file_name, sample_name):
             # 결과 파일 쓰기 시작 -- txt
             os.path.isfile(file_name)
 
-            with open(file_dir, "w") as f:
-                # 추출된 대상 시퀸스들을 파일에 쓴다.
-                for datum in used_data:
-                    f.write(f"{datum}\n")
+            # Storage capacity problem
+            # with open(file_dir, "w") as f:
+            #     # 추출된 대상 시퀸스들을 파일에 쓴다.
+            #     for datum in used_data:
+            #         f.write(f"{datum}\n")
 
             # writing a summary
 
             # barcode name 중복될 때, 찾은 시퀀스 파일이 삭제되는 문제점
             try:
-                result_info_txt.write(f"{file_name} : {num_detected}\n")
+                result_info_txt.write(f"{file_name}:{num_detected}\n")
 
             except Exception as e:
                 print(e)
@@ -135,10 +150,10 @@ def do(src_file_name, dest_file_name, sample_name):
 
             # 프로그램 진행율 계산 부분
             current_cnt += 1
-            # progress_percentage = float(current_cnt) / src_line_cnt * 100
-            # print("{} %".format(progress_percentage)) ; remove unnecessary floating point calculations
+            progress_percentage = float(current_cnt) / src_line_cnt * 100
+            print("{} %".format(progress_percentage))
 
-            if current_cnt % 100 == 0:
+            if current_cnt % 10 == 0:
                 print(f"{current_cnt} out of {len(barcode_data)} barcodes are processed.")
 
     except Exception as e:
@@ -146,7 +161,7 @@ def do(src_file_name, dest_file_name, sample_name):
         print("Extraction Failure.")
         raise
 
-    result_info_txt.write(f"total reads : {src_line_cnt}")
+    result_info_txt.write(f"total_reads:{src_line_cnt}")
     result_info_txt.close()
 
     print("--- %s seconds elapsed ---" % (time.time() - start_time))
@@ -158,18 +173,7 @@ class clsParameter(object):
 
         if len(sys.argv) > 1:
             self.strForwardFqPath = sys.argv[1]
-            self.strReverseFqPath = sys.argv[2]
-            self.strRefFa = sys.argv[3]
-            self.strPair = sys.argv[4]
-            self.floOg = float(sys.argv[5])
-            self.floOe = float(sys.argv[6])
-            self.intInsertionWin = int(sys.argv[7])
-            self.intDeletionWin = int(sys.argv[8])
-            self.strPamType = sys.argv[9].upper()  ## Cpf1, Cas9
-            self.strBarcodePamPos = sys.argv[10]  ## PAM - BARCODE type (reverse) or BARCODE - PAM type (forward)
-            self.intQualCutoff = int(sys.argv[11])
-            self.strOutputdir = sys.argv[12]
-            self.strLogPath = sys.argv[13]
+            self.barcode = sys.argv[2]
 
         else:
             sManual = """
@@ -189,18 +193,10 @@ class clsParameter(object):
 if __name__ == "__main__":
     # Scarapped from Indel searcher
     InstParameter = clsParameter()
-    logging.basicConfig(format='%(process)d %(levelname)s %(asctime)s : %(message)s',
-                        level=logging.DEBUG,
-                        filename=InstParameter.strLogPath,
-                        filemode='a')
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
     logging.info('Program start : %s' % InstParameter.strForwardFqPath)
 
-    # print("Input barcode file name with extension: ")
-    # src_file_name = input()
-    # src_file_name = os.path.join(BASE_DIR, src_file_name)
-    src_file_name = os.path.join(BASE_DIR, "Barcode.txt")
+    src_file_name = os.path.join(BASE_DIR, InstParameter.barcode)
 
     if not os.path.isfile(src_file_name):
         print("File Not Found. Check it is in the src directory")
@@ -215,7 +211,7 @@ if __name__ == "__main__":
         raise Exception
 
     sample_name_token = InstParameter.strForwardFqPath.split('/')[-1].split('.')
-    sample_name = sample_name_token[0] + '.' + sample_name_token[2].split('_')[-1]
+    sample_name = '.'.join(sample_name_token)
 
     do(src_file_name, dest_file_name, sample_name)
 

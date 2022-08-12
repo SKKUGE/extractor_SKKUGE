@@ -180,9 +180,6 @@ class UserFolderAdmin(object):
         self.strProject = options.project_name
 
         self.intCore = options.multicore
-        self.strGapOpen = options.gap_open  # CRISPresso aligner option
-        self.strGapExtend = options.gap_extend  #
-        self.strPython = options.python
 
         self.strOutProjectDir = ''
         self.strOutSampleDir = ''
