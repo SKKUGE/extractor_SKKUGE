@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 
+import csv
+import glob
 import logging
 import math
 import os
+import pickle
 # import cPickle as pickle
 import subprocess as sp
 import sys
@@ -19,8 +22,8 @@ class clsExtractorRunner(UserFolderAdmin):
 
     """
 
-    def __init__(self, strSample, strRef, options, InstInitFolder):
-        UserFolderAdmin.__init__(self, strSample, strRef, options, InstInitFolder.strLogPath)
+    def __init__(self, strSample, options, InstInitFolder):
+        UserFolderAdmin.__init__(self, strSample, options)
         self.MakeSampleFolder()
 
         self.strProjectFile = InstInitFolder.strProjectFile
@@ -29,6 +32,7 @@ class clsExtractorRunner(UserFolderAdmin):
         self.strSplit = options.split
         self.strPython = options.python
         self.barcode = options.barcode
+        self.verbose = options.save_trace
 
         ## Files needed in the FASTQ directory
         self.strFastqDir = './Input/{user}/FASTQ/{project}'.format(user=self.strUser,
@@ -113,12 +117,13 @@ class clsExtractorRunner(UserFolderAdmin):
                 # if self.strPair == 'True':
                 #    strReverse = self.strSplitPath + '/' + listFile[1]
 
-                listCmd.append(('{python} extractor.py {forw} {barcode}').format(
+                listCmd.append(('{python} extractor.py {forw} {barcode} {verbose}').format(
                     python=self.strPython,
-                    forw=strForward, barcode=self.barcode))
+                    forw=strForward, barcode=self.barcode, verbose=self.verbose))
         return listCmd
 
     def MakeOutput(self, listCmd, strSample):
+        # TODO: magic keys
         RESULT_DIR = "./Results/temp"
         OUTPUT_DIR = "./Results/All_results"
 
@@ -127,35 +132,47 @@ class clsExtractorRunner(UserFolderAdmin):
 
         # Get temp file names from the list of commands
 
-        dirs_to_search = []
-
         # sample_name == ./temp/sequence.fastq_1.fq_result_info.txt
 
-        files = os.listdir("./Results/temp")
-        for f in files:
-            processed_split_dir = os.path.join(RESULT_DIR, f)
-            dirs_to_search.append(processed_split_dir)
+        counts = glob.glob(os.path.join(RESULT_DIR, "*.txt"))  # find all temporary read count files
+        findings = glob.glob(os.path.join(RESULT_DIR, "*.trace"))  # find all temporary saved sequence files
 
         # Initialize internal data object to add data segments
-        barcode_dict = defaultdict(int)
+        barcode_dict_for_counts = defaultdict(int)
+        list_for_findings = []
 
         # Sum up the counts
-        for item in dirs_to_search:
+        for item in counts:
             # Open summary file from each dir
             with open(item, 'r') as f:
                 for line in f:
+                    # TODO: processivity improvement with map()
                     # "Barcode" : "count"
                     line_tokens = line.split(':')
                     barcode = line_tokens[0].strip()
                     cnt = int(line_tokens[1].strip())
-                    barcode_dict[barcode] += cnt
+                    barcode_dict_for_counts[barcode] += cnt
 
         with open(f'{OUTPUT_DIR}/{strSample}_Summary.txt', 'w') as summary:
-            for barcode, count in barcode_dict.items():
+            for barcode, count in barcode_dict_for_counts.items():
                 summary.write(f"{barcode} : {count}\n")
 
+        # Gathering the sequence findings
+        if self.verbose:
+            for item in findings:
+                with open(item, 'rb') as fp:
+                    pkl_obj = pickle.load(fp)
+                    list_for_findings.extend(pkl_obj)
+
+            with open(f'{OUTPUT_DIR}/{strSample}_Verbose.csv', 'w') as verbose:
+                csv_out = csv.writer(verbose)
+                for tup in list_for_findings:
+                    csv_out.writerow(tup)
+
         # Remove all intermediate files
-        sp.call('rm -r ./Results/temp/', shell=True)
+
+        if not self.verbose:
+            sp.call('rm -r ./Results/temp/', shell=True)
 
 
 def Main():
@@ -174,19 +191,13 @@ def Main():
     parser.add_option('--split', dest='split', default='False',
                       help='Dont remove the split files in the input folder : True, False')
     parser.add_option('--barcode', dest='barcode', default="Barcode.txt", help='Barcode file')
+    parser.add_option('--save_trace', dest='save_trace', default='True')
 
     options, args = parser.parse_args()
 
     InstInitFolder = InitialFolder(options.user_name, options.project_name, os.path.basename(__file__))
     InstInitFolder.MakeDefaultFolder()
     InstInitFolder.MakeInputFolder()
-    InstInitFolder.MakeOutputFolder()
-
-    logging.basicConfig(format='%(process)d %(levelname)s %(asctime)s : %(message)s',
-                        level=logging.DEBUG,
-                        filename=InstInitFolder.strLogPath,
-                        filemode='a')
-    logging.getLogger().addHandler(logging.StreamHandler(sys.stdout))
 
     logging.info('Program start')
     if options.multicore > 15:
@@ -198,7 +209,7 @@ def Main():
         listSamples = Helper.RemoveNullAndBadKeyword(Sample_list)
         intProjectNumInTxt = len(listSamples)
 
-        strInputProject = './Input/{user}/FASTQ/{project}'.format(user=options.user_name, project=options.project_name)
+        strInputProject = f"./Input/{options.user_name}/FASTQ/{options.project_name}"
 
         @CheckProcessedFiles
         def RunPipeline(**kwargs):
@@ -208,11 +219,10 @@ def Main():
 
                 tupSampleInfo = Helper.SplitSampleInfo(strSample)
                 if not tupSampleInfo: continue
-                strSample, strRef, strExpCtrl = tupSampleInfo
-                setGroup.add(strExpCtrl)
+                strSample = tupSampleInfo
 
                 # Locating input files in the Reference and FASTQ directory
-                InstRunner = clsExtractorRunner(strSample, strRef, options, InstInitFolder)
+                InstRunner = clsExtractorRunner(strSample, options, InstInitFolder)
 
                 # Chunking
                 logging.info('SplitFile')

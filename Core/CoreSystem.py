@@ -4,7 +4,6 @@ import os
 import re
 import subprocess as sp
 import sys
-from datetime import datetime
 from pdb import set_trace
 
 import numpy as np
@@ -43,18 +42,6 @@ class Helper(object):
         else:
             logging.info('The file list is correct, pass\n')
 
-    @staticmethod  ## defensive
-    def CheckAllDone(strOutputProject, listSamples):
-        intProjectNumInOutput = len(
-            [i for i in sp.check_output('ls %s' % strOutputProject, shell=True).decode(encoding="utf-8").split('\n') if
-             i not in ['All_results', 'Log', '']])
-
-        if intProjectNumInOutput != len(listSamples):
-            logging.warning('The number of samples in the output folder and in the project list does not matched.')
-            logging.warning('Output folder: %s, Project list samples: %s\n' % (intProjectNumInOutput, len(listSamples)))
-        else:
-            logging.info('All output folders have been created.\n')
-
     @staticmethod
     def SplitSampleInfo(strSample):
 
@@ -62,16 +49,9 @@ class Helper(object):
         logging.info('Processing sample : %s' % strSample)
         lSampleRef = strSample.replace('\n', '').replace('\r', '').replace(' ', '').split('\t')
 
-        if len(lSampleRef) == 2:
+        if len(lSampleRef) == 1:
             strSample = lSampleRef[0]
-            strRef = lSampleRef[1]
-            return (strSample, strRef, '')
-
-        elif len(lSampleRef) == 3:
-            strSample = lSampleRef[0]
-            strRef = lSampleRef[1]
-            strExpCtrl = lSampleRef[2].upper()
-            return (strSample, strRef, strExpCtrl)
+            return strSample
 
         else:
             logging.error('Confirm the file format is correct. -> Sample name\tReference name\tGroup')
@@ -145,23 +125,6 @@ class InitialFolder(object):
         if not os.path.isfile(self.strProjectFile):
             sp.call('> ' + self.strProjectFile, shell=True)
 
-    def MakeOutputFolder(self):
-
-        ## './Output/JaeWoo'
-        strOutputUserDir = './Output/{user}'.format(user=self.strUser)
-        Helper.MakeFolderIfNot(strOutputUserDir)
-
-        ## './Output/JaeWoo/JaeWoo_test_samples'
-        self.strOutputProjectDir = os.path.join(strOutputUserDir, self.strProject)
-        Helper.MakeFolderIfNot(self.strOutputProjectDir)
-
-        ## './Output/JaeWoo/JaeWoo_test_samples/Log/2022_06_21_20_58_11_log.txt'
-        strOutputLog = os.path.join(self.strOutputProjectDir, 'Log')
-        Helper.MakeFolderIfNot(strOutputLog)
-
-        strLogName = str(datetime.now()).replace('-', '_').replace(':', '_').replace(' ', '_').split('.')[0]
-        self.strLogPath = os.path.join(self.strOutputProjectDir, 'Log/{logname}_log.txt'.format(logname=strLogName))
-
 
 class UserFolderAdmin(object):
     """
@@ -171,10 +134,8 @@ class UserFolderAdmin(object):
     So InitialFolder and UserFolderAdmin must be distinguished.
     """
 
-    def __init__(self, strSample, strRef, options, strLogPath):
+    def __init__(self, strSample, options):
         self.strSample = strSample
-        self.strRef = strRef
-        self.strLogPath = strLogPath
 
         self.strUser = options.user_name
         self.strProject = options.project_name
@@ -205,10 +166,6 @@ class UserFolderAdmin(object):
         ## './Output/Jaewoo/Test_samples/All_results
         strAllResultDir = os.path.join(self.strOutProjectDir, 'All_results')
         Helper.MakeFolderIfNot(strAllResultDir)
-
-        self.strRefDir = './Input/{user}/Reference/{project}/{ref}'.format(user=self.strUser,
-                                                                           project=self.strProject,
-                                                                           ref=self.strRef)
 
 
 class CoreHash(object):
@@ -261,7 +218,6 @@ def CheckProcessedFiles(Func):
         Func(**kwargs)
 
         logging.info('Check that all folders are well created.')
-        Helper.CheckAllDone(InstInitFolder.strOutputProjectDir, listSamples)
 
     return Wrapped_func
 

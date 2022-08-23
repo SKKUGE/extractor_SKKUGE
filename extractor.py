@@ -9,6 +9,7 @@ __editor__ = "poowooho3@g.skku.edu"
 
 import logging
 import os
+import pickle
 import re
 import sys
 import time
@@ -35,7 +36,7 @@ def count_line_in_file(file_name):
     return count
 
 
-def do(src_file_name, dest_file_name, sample_name):
+def do(src_file_name, dest_file_name, sample_name, verbose=True):
     start_time = time.time()
 
     # 프로그램 진행율을 계산하기 위해 파일의 라인수를 센다.
@@ -59,6 +60,7 @@ def do(src_file_name, dest_file_name, sample_name):
 
     # 총 결과 파일명 지정
     # src_file_name == '/home/dengarden/Documents/Repositories/extractor_SKKUGE/Barcode.txt'
+    result_info_pkl_name = os.path.join(result_sample_dir, f"{sample_name}_result_info.trace")  # pickle path
     result_info_file_name = os.path.join(result_sample_dir, f"{sample_name}_result_info.txt")
 
     # file I/O -- txt
@@ -70,6 +72,7 @@ def do(src_file_name, dest_file_name, sample_name):
     barcode_data = [line for line in open(src_file_name, "r")]
 
     try:
+        used_data = []
         # 읽어온 바코드를 속도를 위해 모두 메모리에 올려놓고 분석을 시작한다.
         for barcode in barcode_data:
             # 바코드셋은 :를 구분자로 앞은 파일명, 뒤는 바코드로 되어있다.
@@ -86,7 +89,6 @@ def do(src_file_name, dest_file_name, sample_name):
             # 바코드가 valid한지 검증
             barcode = seq_validator(barcode_set[1].strip())
 
-            used_data = []
             # 대상이 되는 시퀸스들을 하나하나 분석한다.
 
             num_detected = 0
@@ -118,7 +120,8 @@ def do(src_file_name, dest_file_name, sample_name):
                         # This line has another mutation, no count
                         continue
 
-                    used_data.append(line)
+                    # 추출된 대상 시퀸스들을 pickle에 담기 위해 저장한다.
+                    used_data.append((barcode, line))  # key, val
                     num_detected += 1
 
             # 결과가 저장될 파일명 지정
@@ -126,13 +129,6 @@ def do(src_file_name, dest_file_name, sample_name):
 
             # 결과 파일 쓰기 시작 -- txt
             os.path.isfile(file_name)
-
-            # Storage capacity problem
-            # with open(file_dir, "w") as f:
-            #     # 추출된 대상 시퀸스들을 파일에 쓴다.
-            #     for datum in used_data:
-            #         f.write(f"{datum}\n")
-
             # writing a summary
 
             # barcode name 중복될 때, 찾은 시퀀스 파일이 삭제되는 문제점
@@ -150,10 +146,10 @@ def do(src_file_name, dest_file_name, sample_name):
 
             # 프로그램 진행율 계산 부분
             current_cnt += 1
-            progress_percentage = float(current_cnt) / src_line_cnt * 100
-            print("{} %".format(progress_percentage))
 
-            if current_cnt % 10 == 0:
+            if current_cnt % 100 == 0:
+                progress_percentage = (float(current_cnt) / len(barcode_data)) * 100
+                print("{} %".format(progress_percentage))
                 print(f"{current_cnt} out of {len(barcode_data)} barcodes are processed.")
 
     except Exception as e:
@@ -161,8 +157,10 @@ def do(src_file_name, dest_file_name, sample_name):
         print("Extraction Failure.")
         raise
 
-    result_info_txt.write(f"total_reads:{src_line_cnt}")
+    # result_info_txt.write(f"total_reads:{src_line_cnt}")  # unnecessary
     result_info_txt.close()
+    with open(result_info_pkl_name, 'wb') as fp:
+        pickle.dump(used_data, fp)
 
     print("--- %s seconds elapsed ---" % (time.time() - start_time))
 
@@ -174,17 +172,12 @@ class clsParameter(object):
         if len(sys.argv) > 1:
             self.strForwardFqPath = sys.argv[1]
             self.barcode = sys.argv[2]
+            self.verbose = sys.argv[3].lower() == 'true'
 
         else:
             sManual = """
             Usage:
 
-            python2.7 ./indel_search_ver1.0.py splitted_input_1.fq splitted_input_2.fq reference.fa
-
-            splitted_input_1.fq : forward
-            splitted_input_2.fq : reverse
-
-            Total FASTQ(fq) lines / 4 = remainder 0.
             """
             print(sManual)
             sys.exit()
@@ -193,8 +186,6 @@ class clsParameter(object):
 if __name__ == "__main__":
     # Scarapped from Indel searcher
     InstParameter = clsParameter()
-
-    logging.info('Program start : %s' % InstParameter.strForwardFqPath)
 
     src_file_name = os.path.join(BASE_DIR, InstParameter.barcode)
 
@@ -213,7 +204,7 @@ if __name__ == "__main__":
     sample_name_token = InstParameter.strForwardFqPath.split('/')[-1].split('.')
     sample_name = '.'.join(sample_name_token)
 
-    do(src_file_name, dest_file_name, sample_name)
+    do(src_file_name, dest_file_name, sample_name, verbose=InstParameter.verbose)
 
     print("Extraction is completed.")
 
