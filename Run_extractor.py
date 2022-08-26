@@ -166,6 +166,7 @@ class clsExtractorRunner(UserFolderAdmin):
 
             with open(f'{OUTPUT_DIR}/{strSample}_Verbose.csv', 'w') as verbose:
                 csv_out = csv.writer(verbose)
+                csv_out.writerow(("Barcode", "Sequence"))
                 for tup in list_for_findings:
                     csv_out.writerow(tup)
 
