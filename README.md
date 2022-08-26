@@ -5,3 +5,4 @@
 
 ## Credits
 https://github.com/CRISPRJWCHOI/CRISPR_toolkit
+https://github.com/MyungjaeSong/Paired-Library
