@@ -32,7 +32,7 @@ class clsExtractorRunner(UserFolderAdmin):
         self.strSplit = options.split
         self.strPython = options.python
         self.barcode = options.barcode
-        self.verbose = options.save_trace
+        self.verbose = True if options.save_trace.upper() == "TRUE" else False
 
         ## Files needed in the FASTQ directory
         self.strFastqDir = './Input/{user}/FASTQ/{project}'.format(user=self.strUser,
@@ -166,13 +166,13 @@ class clsExtractorRunner(UserFolderAdmin):
 
             with open(f'{OUTPUT_DIR}/{strSample}_Verbose.csv', 'w') as verbose:
                 csv_out = csv.writer(verbose)
+                csv_out.writerow(("Barcode", "Sequence"))
                 for tup in list_for_findings:
                     csv_out.writerow(tup)
 
         # Remove all intermediate files
 
-        if not self.verbose:
-            sp.call('rm -r ./Results/temp/', shell=True)
+        sp.call('rm -r ./Results/temp/', shell=True)
 
 
 def Main():
