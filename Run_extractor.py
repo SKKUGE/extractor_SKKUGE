@@ -124,7 +124,9 @@ class clsExtractorRunner(UserFolderAdmin):
 
     def MakeOutput(self, listCmd, strSample):
         # TODO: magic keys
-        RESULT_DIR = "./Results/temp"
+        forw = listCmd[0].split('/')[-1].split(' ')[0].split('.')[0]
+
+        RESULT_DIR = f"./Results/temp/{forw}"
         OUTPUT_DIR = "./Results/All_results"
 
         if not os.path.exists(OUTPUT_DIR):
@@ -149,9 +151,10 @@ class clsExtractorRunner(UserFolderAdmin):
                     # TODO: processivity improvement with map()
                     # "Barcode" : "count"
                     line_tokens = line.split(':')
-                    barcode = line_tokens[0].strip()
-                    cnt = int(line_tokens[1].strip())
-                    barcode_dict_for_counts[barcode] += cnt
+                    if len(line_tokens) > 1:
+                        barcode = line_tokens[0].strip()
+                        cnt = int(line_tokens[1].strip())
+                        barcode_dict_for_counts[barcode] += cnt
 
         with open(f'{OUTPUT_DIR}/{strSample}_Summary.txt', 'w') as summary:
             for barcode, count in barcode_dict_for_counts.items():

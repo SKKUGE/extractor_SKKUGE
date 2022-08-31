@@ -7,6 +7,7 @@
 __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
+import errno
 import logging
 import os
 import pickle
@@ -54,9 +55,14 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
         os.makedirs(result_folder_name)
 
     # 결과가 저장될 샘플 폴더 지정 -- temp 폴더에 곧바로 저장
-    result_sample_dir = os.path.join(result_folder_name, f"temp/")
-    if not os.path.exists(result_sample_dir):
+    sample_class = sample_name.split('.')[0]
+    result_sample_dir = os.path.join(result_folder_name, f"temp/{sample_class}")
+
+    try:
         os.makedirs(result_sample_dir)
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            raise
 
     # 총 결과 파일명 지정
     # src_file_name == '/home/dengarden/Documents/Repositories/extractor_SKKUGE/Barcode.txt'
@@ -75,6 +81,8 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
         used_data = []
         # 읽어온 바코드를 속도를 위해 모두 메모리에 올려놓고 분석을 시작한다.
         for barcode in barcode_data:
+            used_lines = []
+
             # 바코드셋은 :를 구분자로 앞은 파일명, 뒤는 바코드로 되어있다.
             # barcode_set : ['Frag1_Pos_1_M_A', 'GCCACTGAATATAAACTT\n']
             barcode_set = barcode.split(":")
@@ -94,7 +102,7 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
             num_detected = 0
 
             another_mt_flag = False
-            for line in data:
+            for idx, line in enumerate(data):
                 # 비교를 위해 바코드, 대상 시퀸스 둘다 소문자로 변환하여 바코드가 대상 시퀸스 내에 존재하는지 검사
                 if barcode.lower() in line.lower():
                     # processing buffer
@@ -123,6 +131,7 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
                     # 추출된 대상 시퀸스들을 pickle에 담기 위해 저장한다.
                     used_data.append((barcode, line))  # key, val
                     num_detected += 1
+                    used_lines.append(idx)
 
             # 결과가 저장될 파일명 지정
             file_dir = os.path.join(result_sample_dir, f"{file_name}.txt")
@@ -141,8 +150,8 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
                     "Extraction has been done. But Making a result-info.txt is failed."
                 )
                 raise
-            # 파일에 전부 옮겨담았다면 메모리에 올라간 전체 대상 시퀸스들에서 파일에 쓴 대상 시퀸스를 뺀다. -> bottleneck step; processing time increases about two times without it
-            # [data.remove(used_datum) for used_datum in used_data]
+            # TODO: 파일에 전부 옮겨담았다면 메모리에 올라간 전체 대상 시퀸스들에서 파일에 쓴 대상 시퀸스를 뺀다. -> bottleneck step; processing time increases about two times without it;  WT 중복이 너무 많이 발생..
+            data = [i for j, i in enumerate(data) if j not in used_lines]
 
             # 프로그램 진행율 계산 부분
             current_cnt += 1
