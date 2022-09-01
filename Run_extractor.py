@@ -175,7 +175,7 @@ class clsExtractorRunner(UserFolderAdmin):
 
         # Remove all intermediate files
 
-        sp.call('rm -r ./Results/temp/', shell=True)
+        # sp.call('rm -r ./Results/temp/', shell=True)
 
 
 def Main():
