@@ -1,5 +1,4 @@
 import logging
-import multiprocessing as mp
 import os
 import re
 import subprocess as sp
@@ -7,6 +6,7 @@ import sys
 from pdb import set_trace
 
 import numpy as np
+import parmap
 
 
 class Helper(object):
@@ -265,6 +265,9 @@ def RunMulticore(lCmd, iCore):
     for sCmd in lCmd:
         print(sCmd)
 
-    p = mp.Pool(iCore)
-    p.map_async(RunProgram, lCmd).get()
-    p.close()
+    # p = mp.Pool(iCore)
+    # p.map_async(RunProgram, lCmd).get()
+    # p.close()
+
+    rc = parmap.map(RunProgram, lCmd, pm_pbar=True)
+    # print(rc)

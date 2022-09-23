@@ -8,7 +8,6 @@ __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
 import errno
-import logging
 import os
 import pickle
 import re
@@ -40,13 +39,13 @@ def count_line_in_file(file_name):
 def do(src_file_name, dest_file_name, sample_name, verbose=True):
     start_time = time.time()
 
-    # 프로그램 진행율을 계산하기 위해 파일의 라인수를 센다.
-    src_line_cnt = count_line_in_file(dest_file_name)
-    if src_line_cnt == 0:
-        print("File Not Found")
-        raise
+    # 프로그램 진행율을 계산하기 위해 파일의 라인수를 센다. --deprecated
+    # src_line_cnt = count_line_in_file(dest_file_name)
+    # if src_line_cnt == 0:
+    #     print("File Not Found")
+    #     raise
+    # extracted_line_index = []
     current_cnt = 0
-    extracted_line_index = []
 
     # 결과가 저장될 폴더 지정
     result_folder_name = os.path.join(BASE_DIR, "Results")
@@ -80,6 +79,8 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
     try:
         used_data = []
         # 읽어온 바코드를 속도를 위해 모두 메모리에 올려놓고 분석을 시작한다.
+
+        # TODO: Possible C integration part
         for barcode in barcode_data:
             used_lines = []
 
@@ -101,14 +102,19 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
 
             num_detected = 0
 
-            another_mt_flag = False
+            # another_mt_flag = False
             for idx, line in enumerate(data):
                 # 비교를 위해 바코드, 대상 시퀸스 둘다 소문자로 변환하여 바코드가 대상 시퀸스 내에 존재하는지 검사
+
+                # TODO: debug
+                # if barcode_set[0].strip().split('_')[2] == "7" and len(line) == 278:
+                #     print(f">{barcode}\n{line}")
+
                 if barcode.lower() in line.lower():
                     # processing buffer
 
                     # if src_aa == dst_aa:
-                    #     # Full-sweep barcode chekcing
+                    #     # Full-sweep barcode checking
                     #     for barcode_complex in barcode_data:
                     #         try:
                     #             deep_barcode = barcode_complex.split(':')[1].strip()
@@ -124,9 +130,9 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
                     #             another_mt_flag = True
                     #             break
 
-                    if another_mt_flag:
-                        # This line has another mutation, no count
-                        continue
+                    # if another_mt_flag:
+                    # This line has another mutation, no count
+                    # continue
 
                     # 추출된 대상 시퀸스들을 pickle에 담기 위해 저장한다.
                     used_data.append((barcode, line))  # key, val
@@ -151,12 +157,13 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
                 )
                 raise
             # TODO: 파일에 전부 옮겨담았다면 메모리에 올라간 전체 대상 시퀸스들에서 파일에 쓴 대상 시퀸스를 뺀다. -> bottleneck step; processing time increases about two times without it;  WT 중복이 너무 많이 발생..
+            # TODO: debug
             data = [i for j, i in enumerate(data) if j not in used_lines]
 
             # 프로그램 진행율 계산 부분
             current_cnt += 1
 
-            if current_cnt % 100 == 0:
+            if current_cnt % 10000 == 0:
                 progress_percentage = (float(current_cnt) / len(barcode_data)) * 100
                 print("{} %".format(progress_percentage))
                 print(f"{current_cnt} out of {len(barcode_data)} barcodes are processed.")
@@ -171,7 +178,7 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
     with open(result_info_pkl_name, 'wb') as fp:
         pickle.dump(used_data, fp)
 
-    print("--- %s seconds elapsed ---" % (time.time() - start_time))
+    # print("--- %s seconds elapsed ---" % (time.time() - start_time))
 
 
 class clsParameter(object):
@@ -215,6 +222,6 @@ if __name__ == "__main__":
 
     do(src_file_name, dest_file_name, sample_name, verbose=InstParameter.verbose)
 
-    print("Extraction is completed.")
-
-    logging.info('Program end : %s' % InstParameter.strForwardFqPath)
+    # print("Extraction is completed.")
+    #
+    # logging.info('Program end : %s' % InstParameter.strForwardFqPath)

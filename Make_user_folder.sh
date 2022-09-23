@@ -1,7 +1,7 @@
-#!/bin/bash
+#!/bin/zsh
 
-user=JU
-project=KRAS
+user=KJS
+project=PELIB
 
 [ ! -d ./Input ] && { mkdir ./Input; }
 [ ! -d ./User ] && { mkdir ./User; }
@@ -16,7 +16,7 @@ project=KRAS
 [ ! -d ./User/${user} ] && eval mkdir ./User/${user};
 
 # TODO: What is the usage?
-> ./User/${user}/${project}.txt
+# > ./User/${user}/${project}.txt
 
 
 

@@ -123,8 +123,9 @@ class clsExtractorRunner(UserFolderAdmin):
         return listCmd
 
     def MakeOutput(self, listCmd, strSample):
-        # TODO: magic keys
-        forw = listCmd[0].split('/')[-1].split(' ')[0].split('.')[0]
+        # TODO: magic keys; design changes can bring disaster
+        forw = listCmd[0].split('/')[-3].split(' ')[0].split('.')[
+            0]  # Barcode files are relocated to "./Barcodes" directory
 
         RESULT_DIR = f"./Results/temp/{forw}"
         OUTPUT_DIR = "./Results/All_results"
