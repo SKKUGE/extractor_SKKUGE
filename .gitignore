@@ -473,3 +473,8 @@ User/KJY/KJY_As_and_T.txt
 
 *.fq
 *.fastq
+*.csv
+*.xlsx
+*.txt
+*.txt~
+*.txt#

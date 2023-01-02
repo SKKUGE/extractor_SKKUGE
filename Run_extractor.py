@@ -40,6 +40,7 @@ class clsExtractorRunner(UserFolderAdmin):
         ## './Input/JaeWoo/FASTQ/JaeWoo_test_samples/Test_sample'
         self.strSampleDir = os.path.join(self.strFastqDir, self.strSample)
 
+        # TODO: processing multiple files at once
         self.strFastq_name = ''
         for strFile in os.listdir(self.strSampleDir):
             if os.path.isfile(self.strSampleDir + '/' + strFile) and strFile.split('.')[-1] == 'fastq':

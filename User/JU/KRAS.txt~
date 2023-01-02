@@ -1,29 +1,47 @@
-#20220314	
-D3_C1	KRAS_G12D_mutant_lib
-D3_C2	KRAS_G12D_mutant_lib
-D3_4	KRAS_G12D_mutant_lib
-D3_40	KRAS_G12D_mutant_lib
-D10_C1	KRAS_G12D_mutant_lib
-D10_C2	KRAS_G12D_mutant_lib
-D10_4	KRAS_G12D_mutant_lib
-D10_40	KRAS_G12D_mutant_lib
-D14_C1	KRAS_G12D_mutant_lib
-D14_40	KRAS_G12D_mutant_lib
-
-#20220517	
-1st_100	KRAS_G12D_mutant_lib
-
-#20220629	
-220218_con1-1_f1_f2	KRAS_G12D_mutant_lib
-220218_con1-1_f3	KRAS_G12D_mutant_lib
-220218_40uM_f1_f2	KRAS_G12D_mutant_lib
-220218_40uM_f3	KRAS_G12D_mutant_lib
-220228_con1-1_f1_f2	KRAS_G12D_mutant_lib
-220228_con1-1_f3	KRAS_G12D_mutant_lib
-220228_40uM_f1_f2	KRAS_G12D_mutant_lib
-220228_40uM_f3	KRAS_G12D_mutant_lib
-
-#20220727	
-Small_D9_Ctrl	KRAS_G12D_mutant_lib
-Small_D9_40	KRAS_G12D_mutant_lib
-Small_D9_100	KRAS_G12D_mutant_lib
+#20220314
+D3_C1
+D3_C2
+D3_4
+D3_40
+D10_C1
+D10_C2
+D10_4
+D10_40
+D14_C1
+D14_40
+#20220517
+1st_100
+#20220629
+220218_con1-1_f1_f2
+220218_con1-1_f3
+220218_40uM_f1_f2
+220218_40uM_f3
+220228_con1-1_f1_f2
+220228_con1-1_f3
+220228_40uM_f1_f2
+220228_40uM_f3
+#20220727
+Small_D9_Ctrl
+Small_D9_40
+Small_D9_100
+#20220819
+Small_D9_Ctrl_extended
+Small_D9_40_extended
+Small_D9_100_exnteded
+#20220824
+20220824_Small_D9_100
+20220824_Small_D9_40
+20220824_Small_D9_Ctrl
+#20220830_MRTXHiSeqResults
+MRTX_220605_con
+MRTX_220605_40
+MRTX_220611_con
+MRTX_220611_40
+MRTX_220617_con
+MRTX_220617_40
+MRTX_220626_con
+MRTX_220626_40
+#20220902_SmallLib_iSeq
+20220824_Small_D9_100
+20220824_Small_D9_40
+20220824_Small_D9_Ctrl

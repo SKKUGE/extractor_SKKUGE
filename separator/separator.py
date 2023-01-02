@@ -9,9 +9,6 @@ N_JOBS = 2
 FRAG_LENGTH = [278, 268, 194]
 GENEROSITY = 1
 FILES = """
-20220901_7.extendedFrags.fastq
-20220901_8.extendedFrags.fastq
-20220901_9.extendedFrags.fastq
 20220930_1.extendedFrags.fastq
 20220930_2.extendedFrags.fastq
 20220930_3.extendedFrags.fastq
