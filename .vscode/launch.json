@@ -21,7 +21,8 @@
         "-p",
         "KRAS",
         "--barcode",
-        "test.txt"
+        "test_barcode.txt",
+        "--dev"
       ]
     }
   ]

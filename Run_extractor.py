@@ -12,14 +12,17 @@ from collections import defaultdict
 import argparse
 import pathlib
 import multiprocessing as mp
+from types import SimpleNamespace
+
 
 sys.path.insert(0, os.path.dirname(os.getcwd()))
 from Core.CoreSystem import (
-    SystemStructureChecker,
+    SystemStructure,
     UserFolderAdmin,
     Helper,
+    run_pipeline,
     RunMulticore,
-    CheckProcessedFiles,
+    system_struct_checker,
 )
 
 
@@ -29,11 +32,11 @@ class clsExtractorRunner(UserFolderAdmin):
 
     """
 
-    def __init__(self, strSample, args, InstInitFolder):
+    def __init__(self, strSample, args, system_structure):
         UserFolderAdmin.__init__(self, strSample, args)
         self.MakeSampleFolder()
 
-        self.strProjectFile = InstInitFolder.strProjectFile
+        self.strProjectFile = system_structure.strProjectFile
         self.intChunkSize = args.chunk_number
         self.strPickle = args.pickle
         self.strSplit = args.split
@@ -271,66 +274,28 @@ def main():
     parser.add_argument(
         "--save_trace", action="store_false", help="Save the trace files : True, False"
     )
+    parser.add_argument("--dev", action="store_true", help="development mode")
     args = parser.parse_args()
 
-    InstInitFolder = SystemStructureChecker(args.user_name, args.project_name)
-    InstInitFolder.MakeInputFolder()
+    system_structure = SystemStructure(args.user_name, args.project_name)
 
-    logging.info("Program start")
-    if mp.cpu_count < args.multicore :
-        logging.warning(f"Optimal threads <= {mp.cpu_count} : {args.multicore} is not recommended")
-    for arg, value in sorted(vars(args).items()):
-        logging.info(f"Argument {arg}: {value}")
-
+    # Prepare logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+    stream_handler = logging.StreamHandler()
+    logger.addHandler(stream_handler)
     # TODO: follow the system directory structure
-    with open(InstInitFolder.strProjectFile) as Sample_list:
 
-        listSamples = Helper.RemoveNullAndBadKeyword(Sample_list)
-        intProjectNumInTxt = len(listSamples)
+    samples = Helper.load_samples(system_structure.project_samples_dir)
 
-        strInputProject = f"./Input/{args.user_name}/FASTQ/{args.project_name}"
+    # Add custom arguments
+    args.system_structure = system_structure
+    args.samples = samples
+    args.logger = logger
 
-        @CheckProcessedFiles
-        def RunPipeline(**kwargs):
+    run_pipeline(SimpleNamespace(**vars(args)))
 
-            setGroup = set()
-            for strSample in listSamples:
-
-                tupSampleInfo = Helper.SplitSampleInfo(strSample)
-                if not tupSampleInfo:
-                    continue
-                strSample = tupSampleInfo
-
-                # Locating input files in the Reference and FASTQ directory
-                InstRunner = clsExtractorRunner(strSample, args, InstInitFolder)
-
-                # Chunking
-                logging.info("SplitFile")
-                InstRunner.SplitFile()
-
-                # Generating a command for utilizing Python multiprocessing
-                logging.info("MakeExtractorCmd")
-                listCmd = InstRunner.MakeExtractorCmd()
-
-                logging.info("RunMulticore")
-                RunMulticore(listCmd, args.multicore)  ## from CoreSystem.py
-
-                # Need Adaptation
-                logging.info("MakeOutput")
-                InstRunner.MakeOutput(listCmd, strSample)
-
-        RunPipeline(
-            InstInitFolder=InstInitFolder,
-            strInputProject=strInputProject,
-            intProjectNumInTxt=intProjectNumInTxt,
-            listSamples=listSamples,
-            logging=logging,
-        )
-
-    logging.info("Program end")
-
-
-# END:def
+    logger.info("Program end")
 
 
 if __name__ == "__main__":

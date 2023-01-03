@@ -7,6 +7,7 @@ import sys
 from datetime import datetime
 from pdb import set_trace
 import pathlib
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -16,33 +17,58 @@ import numpy as np
 #
 
 
-class Helper(object):
+class Helper(object) :
     @staticmethod
-    def MakeFolderIfNot(directory):
-        pathlib.Path(directory).mkdir(parents=True, exist_ok=True)
+    def MakeFolderIfNot(directory: str) -> pathlib.Path:
+        """
+        > If the directory doesn't exist, create it
+        
+        :param directory: The directory to create
+        :type directory: str
+        :return: A path object
+        """
+        path = pathlib.Path(directory)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     @staticmethod
-    def RemoveNullAndBadKeyword(Sample_list):
-        listSamples = [
-            strRow
-            for strRow in Sample_list.readlines()
-            if strRow not in ["''", "", '""', "\n", "\r", "\r\n"]
-        ]
-        return listSamples
+    def load_samples(dir: pathlib.Path) -> list:
+        """
+        It reads a file and returns a list of non-empty lines that don't start with a hash
+        
+        :param dir: the directory of the samples file
+        :type dir: pathlib.Path
+        :return: A list of samples.
+        """
+        with open(dir, "r") as file:
+            sample_list = [sample for sample in list(filter(None, map(str.strip, file.read().split("\n")))) if sample[0] != "#"]
+
+        return sample_list
 
     @staticmethod  ## defensive
-    def CheckSameNum(strInputProject, listSamples):
+    def equal_num_samples_checker(proj_path: pathlib.Path, loaded_samples: list, logger):
+        
+        if len(list(proj_path.glob("*"))) != len(loaded_samples):
+            logger.warning(
+                "The number of samples in the Input folder and in the User folder does not matched."
+            )
 
-        listProjectNumInInput = [
-            i
-            for i in sp.check_output(f"ls {strInputProject}", shell=False).split("\n")
-            if i != ""
-        ]
+            input_entries = [i.name for i in proj_path.glob("*")]
+            user_entries = [i for i in loaded_samples]
+            logger.warning(
+                f"Input folder: {len(list(proj_path.glob("*")))}, Project list samples: {len(loaded_samples)}"
+            )
+            logger.warning(
+                f"Input folder: {[i for i in input_entries if i not in user_entries]}, Project list samples: {[u for u in user_entries if u not in input_entries]}"
+            )
+        else:
+            logging.info("The file list is correct, pass\n")
+        
 
-        setSamples = set(listSamples)
+        setSamples = set(loaded_samples)
         setProjectNumInInput = set(listProjectNumInInput)
 
-        intProjectNumInTxt = len(listSamples)
+        intProjectNumInTxt = len(loaded_samples)
         intProjectNumInInput = len(listProjectNumInInput)
 
         if intProjectNumInTxt != len(setSamples - setProjectNumInInput):
@@ -53,8 +79,7 @@ class Helper(object):
                 f"Input folder: {intProjectNumInInput}, Project list samples: {intProjectNumInTxt}"
             )
             raise AssertionError
-        else:
-            logging.info("The file list is correct, pass\n")
+        
 
     @staticmethod  ## defensive
     def CheckAllDone(strOutputProject, listSamples):
@@ -132,7 +157,7 @@ class Helper(object):
             raise Exception("%s is critical mistake! never do like this." % strCmd)
 
 
-class SystemStructureChecker(object):
+class SystemStructure(object):
     def __init__(
         self,
         user_name: str,
@@ -140,23 +165,26 @@ class SystemStructureChecker(object):
     ):
         self.user_name = user_name
         self.project_name = project_name
+        self.project_samples_dir = ""
 
-        Helper.MakeFolderIfNot("User" / self.user_name)
-        Helper.MakeFolderIfNot("Barcodes")
-
-    def MakeInputFolder(self):
-        Helper.MakeFolderIfNot("Input" / self.user_name / "FASTQ" / self.project_name)
-        self.project_samples = pathlib.Path(
-            "User" / self.user_name / f"{self.project_name}.txt"
+        self.user_dir = Helper.MakeFolderIfNot("User" + "/" + self.user_name)
+        self.barcode_dir = Helper.MakeFolderIfNot("Barcodes")    
+        self.input_dir = Helper.MakeFolderIfNot(
+            "Input" + "/" + self.user_name + "/" + "FASTQ" + "/" + self.project_name
         )
-        if not self.project_samples.exists():
-            with open(self.project_samples, "w") as f:
+        self.project_samples_dir = pathlib.Path(
+            "User" + "/" + self.user_name + "/" + f"{self.project_name}.txt"
+        )
+        if not self.project_samples_dir.exists():
+            with open(self.project_samples_dir, "w") as f:
                 f.write("")
 
     def MakeOutputFolder(self):
 
         ## './Output/JaeWoo'
-        Helper.MakeFolderIfNot("Output" / self.user_name / self.project_name)
+        Helper.MakeFolderIfNot(
+            "Output" + "/" + self.user_name + "/" + self.project_name
+        )
         strOutputUserDir = f"./Output/{self.user_name}"
         Helper.MakeFolderIfNot(strOutputUserDir)
 
@@ -277,29 +305,56 @@ class CoreGotoh(object):
         return listResult
 
 
-def CheckProcessedFiles(Func):
-    def Wrapped_func(**kwargs):
-        # kwargs
-        # InstInitFolder = InstInitFolder,
-        # strInputProject = strInputProject,
-        # intProjectNumInTxt = intProjectNumInTxt,
-        # listSamples = listSamples,
-        # logging = logging
+def system_struct_checker(func):
+    def wrapper(args: SimpleNamespace):
 
-        InstInitFolder = kwargs["InstInitFolder"]
-        strInputProject = kwargs["strInputProject"]
-        listSamples = kwargs["listSamples"]
-        logging = kwargs["logging"]
+        args.logger.info("Program start")
+        if mp.cpu_count() < args.multicore:
+            args.logger.warning(
+                f"Optimal threads <= {mp.cpu_count()} : {args.multicore} is not recommended"
+            )
+        for key, value in sorted(vars(args).items()):
+            args.logger.info(f"Argument {key}: {value}")
 
-        logging.info("File num check: input folder and project list")
-        Helper.CheckSameNum(strInputProject, listSamples)
+        args.logger.info("File num check: input folder and project list")
+        Helper.equal_num_samples_checker(args.system_structure.input_dir, args.samples, args.logger)
 
-        Func(**kwargs)
+        func(args)
 
-        logging.info("Check that all folder are well created.")
+        args.logger.info("Check that all folder are well created.")
         Helper.CheckAllDone(InstInitFolder.strOutputProjectDir, listSamples)
 
-    return Wrapped_func
+    return wrapper
+
+
+@system_struct_checker
+def run_pipeline(arsgs:SimpleNamespace):
+
+    setGroup = set()
+    for strSample in samples:
+
+        tupSampleInfo = Helper.SplitSampleInfo(strSample)
+        if not tupSampleInfo:
+            continue
+        strSample = tupSampleInfo
+
+        # Locating input files in the Reference and FASTQ directory
+        InstRunner = clsExtractorRunner(strSample, args, system_structure)
+
+        # Chunking
+        logging.info("SplitFile")
+        InstRunner.SplitFile()
+
+        # Generating a command for utilizing Python multiprocessing
+        logging.info("MakeExtractorCmd")
+        listCmd = InstRunner.MakeExtractorCmd()
+
+        logging.info("RunMulticore")
+        RunMulticore(listCmd, args.multicore)  ## from CoreSystem.py
+
+        # Need Adaptation
+        logging.info("MakeOutput")
+        InstRunner.MakeOutput(listCmd, strSample)
 
 
 def AttachSeqToIndel(
