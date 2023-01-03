@@ -11,7 +11,6 @@ import subprocess as sp
 import sys
 from collections import defaultdict
 from optparse import OptionParser
-
 sys.path.insert(0, os.path.dirname(os.getcwd()))
 from Core.CoreSystem import InitialFolder, UserFolderAdmin, Helper, RunMulticore, CheckProcessedFiles
 
@@ -199,6 +198,14 @@ def Main():
 
     options, args = parser.parse_args()
 
+    csvfile = open('Barcode_test.csv', 'r') #barcode csv file path
+    option_csv = csv.reader(csvfile)
+    option_data = next(option_csv)
+    
+    options.user_name = option_data[0]
+    options.project_name = option_data[1]
+    csvfile.close()
+    print(options.user_name, options.project_name)
     InstInitFolder = InitialFolder(options.user_name, options.project_name, os.path.basename(__file__))
     InstInitFolder.MakeDefaultFolder()
     InstInitFolder.MakeInputFolder()
