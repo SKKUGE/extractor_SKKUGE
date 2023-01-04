@@ -14,12 +14,10 @@
       "args": [
         "-t",
         "16",
-        "--python",
-        "/home/dengarden/anaconda3/envs/extractor_SKKUGE/bin/python",
         "-u",
         "JU",
         "-p",
-        "KRAS",
+        "test_proj",
         "--barcode",
         "test_barcode.txt",
         "--dev"
