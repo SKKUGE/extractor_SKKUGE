@@ -15,7 +15,7 @@ from pdb import set_trace
 from types import SimpleNamespace
 from concurrent.futures import ProcessPoolExecutor
 
-from extractor import main as extractor_main
+import pandas as pd
 
 
 class Helper(object):
@@ -321,6 +321,7 @@ class ExtractorRunner:
                 pathlib.Path.cwd()
                 / self.args.system_structure.barcode_dir
                 / self.args.barcode,
+                self.args.system_structure,
                 self.args.logger,
             )
             for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
@@ -436,13 +437,18 @@ def run_pipeline(args: SimpleNamespace) -> None:
         extractor_runner.MakeOutput(listCmd, sample)
 
 
-def run_extractor_mp(lCmd, iCore, logger) -> None:
+def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
+    from extractor import main as extractor_main
+
     for sCmd in lCmd:
         logger.info(f"Running {sCmd} command with {iCore} cores")
 
     result = []
+    df = pd.DataFrame()
     with ProcessPoolExecutor(max_workers=iCore) as executor:
         for rval in executor.map(extractor_main, lCmd):
             result.append(rval)
 
     logger.info(f"All extraction process completed")
+
+    return df

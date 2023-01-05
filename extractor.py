@@ -7,23 +7,23 @@
 __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
-import errno
 import os
 import pickle
 import re
 import sys
 import time
 import pathlib
-import logging
+
+import pandas as pd
+from tqdm import tqdm
+import skbio
+
+from Core.CoreSystem import SystemStructure
 
 BASE_DIR = os.path.dirname(sys.executable)
 
 # for debug
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
-
-
-def help():
-    """[Extracting nucleotide sequence from NGS result with specific barcodes]"""
 
 
 def seq_validator(data):
@@ -39,59 +39,37 @@ def count_line_in_file(file_name):
 
 
 def extract_read_cnts(
-    sample_name,
-    dest_file_name,
-    src_file_name,
-):
-    start_time = time.time()
+    sample_name: str,
+    sequence_file: pathlib.Path,
+    barcode_file: pathlib.Path,
+    system_structure: SystemStructure,
+) -> pd.DataFrame:
+    # df index == barcode, column == read count
 
-    # 프로그램 진행율을 계산하기 위해 파일의 라인수를 센다. --deprecated
-    # src_line_cnt = count_line_in_file(dest_file_name)
-    # if src_line_cnt == 0:
-    #     print("File Not Found")
-    #     raise
-    # extracted_line_index = []
-    current_cnt = 0
+    # Load barcode file
+    extraction_results = pd.read_csv(
+        barcode_file, sep=":", header=None, names=["Gene", "Barcode"]
+    ).set_index(
+        "Gene"
+    )  # TODO: tentative design
+    extraction_results["Reads"] = 0
 
-    # 결과가 저장될 폴더 지정
-    result_folder_name = os.path.join(BASE_DIR, "Results")
-    # 결과가 저장될 폴더가 없다면 하나 생성
-    if not os.path.exists(result_folder_name):
-        os.makedirs(result_folder_name)
+    # Load a splitted sequencing result using high-level I/O
 
-    # 결과가 저장될 샘플 폴더 지정 -- temp 폴더에 곧바로 저장
-    sample_class = sample_name.split(".")[0]
-    result_sample_dir = os.path.join(result_folder_name, f"temp/{sample_class}")
-
-    try:
-        os.makedirs(result_sample_dir)
-    except OSError as e:
-        if e.errno != errno.EEXIST:
-            raise
-
-    # 총 결과 파일명 지정
-    # src_file_name == '/home/dengarden/Documents/Repositories/extractor_SKKUGE/Barcode.txt'
-    result_info_pkl_name = os.path.join(
-        result_sample_dir, f"{sample_name}_result_info.trace"
-    )  # pickle path
-    result_info_file_name = os.path.join(
-        result_sample_dir, f"{sample_name}_result_info.txt"
+    seqs = skbio.io.read(
+        sequence_file, format="fastq", verify=False, variant="illumina1.8"
     )
 
-    # file I/O -- txt
-    result_info_txt = open(result_info_file_name, "w")
+    data = [line.strip() for line in open(sequence_file, "r") if seq_validator(line)]
 
-    # 추출할 시퀸스가 있는 파일을 읽어온다.
-    data = [line.strip() for line in open(dest_file_name, "r") if seq_validator(line)]
-    # 바코드가 있는 파일을 읽어온다.
-    barcode_data = [line for line in open(src_file_name, "r")]
+    result_info_txt = open(result_info_file_name, "w")
 
     try:
         used_data = []
         # 읽어온 바코드를 속도를 위해 모두 메모리에 올려놓고 분석을 시작한다.
 
         # TODO: Possible C integration part
-        for barcode in barcode_data:
+        for barcode in tqdm(barcode_data):
             used_lines = []
 
             # 바코드셋은 :를 구분자로 앞은 파일명, 뒤는 바코드로 되어있다.
@@ -170,40 +148,21 @@ def extract_read_cnts(
             # TODO: debug
             data = [i for j, i in enumerate(data) if j not in used_lines]
 
-            # 프로그램 진행율 계산 부분
-            current_cnt += 1
-
-            if current_cnt % 10000 == 0:
-                progress_percentage = (float(current_cnt) / len(barcode_data)) * 100
-                print("{} %".format(progress_percentage))
-                print(
-                    f"{current_cnt} out of {len(barcode_data)} barcodes are processed."
-                )
-
     except Exception as e:
         print(e)
         print("Extraction Failure.")
         raise
 
-    # result_info_txt.write(f"total_reads:{src_line_cnt}")  # unnecessary
-    result_info_txt.close()
-    with open(result_info_pkl_name, "wb") as fp:
-        pickle.dump(used_data, fp)
-
-    # print("--- %s seconds elapsed ---" % (time.time() - start_time))
+    return extraction_results
 
 
-def main(*args):
-    (sample, sequence, barcode, logger) = args[0]
+def main(*args) -> pd.DataFrame:
+    (sample, sequence, barcode, system_structure, logger) = args[0]
 
     start = time.time()
-    # extract_read_cnts(
-    #     sample,
-    #     sequence,
-    #     barcode,
-    # )
+    rval = extract_read_cnts(sample, sequence, barcode, system_structure)
     end = time.time()
 
     logger.info(f"Extraction for {sample} is done. {end - start}s elapsed.")
 
-    return f"here is the result: {sequence}"
+    return rval
