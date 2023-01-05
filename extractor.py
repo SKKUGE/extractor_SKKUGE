@@ -13,6 +13,8 @@ import pickle
 import re
 import sys
 import time
+import pathlib
+import logging
 
 BASE_DIR = os.path.dirname(sys.executable)
 
@@ -36,7 +38,11 @@ def count_line_in_file(file_name):
     return count
 
 
-def do(src_file_name, dest_file_name, sample_name, verbose=True):
+def extract_read_cnts(
+    sample_name,
+    dest_file_name,
+    src_file_name,
+):
     start_time = time.time()
 
     # 프로그램 진행율을 계산하기 위해 파일의 라인수를 센다. --deprecated
@@ -54,7 +60,7 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
         os.makedirs(result_folder_name)
 
     # 결과가 저장될 샘플 폴더 지정 -- temp 폴더에 곧바로 저장
-    sample_class = sample_name.split('.')[0]
+    sample_class = sample_name.split(".")[0]
     result_sample_dir = os.path.join(result_folder_name, f"temp/{sample_class}")
 
     try:
@@ -65,8 +71,12 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
 
     # 총 결과 파일명 지정
     # src_file_name == '/home/dengarden/Documents/Repositories/extractor_SKKUGE/Barcode.txt'
-    result_info_pkl_name = os.path.join(result_sample_dir, f"{sample_name}_result_info.trace")  # pickle path
-    result_info_file_name = os.path.join(result_sample_dir, f"{sample_name}_result_info.txt")
+    result_info_pkl_name = os.path.join(
+        result_sample_dir, f"{sample_name}_result_info.trace"
+    )  # pickle path
+    result_info_file_name = os.path.join(
+        result_sample_dir, f"{sample_name}_result_info.txt"
+    )
 
     # file I/O -- txt
     result_info_txt = open(result_info_file_name, "w")
@@ -166,7 +176,9 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
             if current_cnt % 10000 == 0:
                 progress_percentage = (float(current_cnt) / len(barcode_data)) * 100
                 print("{} %".format(progress_percentage))
-                print(f"{current_cnt} out of {len(barcode_data)} barcodes are processed.")
+                print(
+                    f"{current_cnt} out of {len(barcode_data)} barcodes are processed."
+                )
 
     except Exception as e:
         print(e)
@@ -175,53 +187,21 @@ def do(src_file_name, dest_file_name, sample_name, verbose=True):
 
     # result_info_txt.write(f"total_reads:{src_line_cnt}")  # unnecessary
     result_info_txt.close()
-    with open(result_info_pkl_name, 'wb') as fp:
+    with open(result_info_pkl_name, "wb") as fp:
         pickle.dump(used_data, fp)
 
     # print("--- %s seconds elapsed ---" % (time.time() - start_time))
 
 
-class clsParameter(object):
+def main(*args):
+    (sample, sequence, barcode, logger) = args[0]
 
-    def __init__(self):
+    start = time.time()
+    extract_read_cnts(
+        sample,
+        sequence,
+        barcode,
+    )
+    end = time.time()
 
-        if len(sys.argv) > 1:
-            self.strForwardFqPath = sys.argv[1]
-            self.barcode = sys.argv[2]
-            self.verbose = sys.argv[3].lower() == 'true'
-
-        else:
-            sManual = """
-            Usage:
-
-            """
-            print(sManual)
-            sys.exit()
-
-
-if __name__ == "__main__":
-    # Scarapped from Indel searcher
-    InstParameter = clsParameter()
-
-    src_file_name = os.path.join(BASE_DIR, InstParameter.barcode)
-
-    if not os.path.isfile(src_file_name):
-        print("File Not Found. Check it is in the src directory")
-        raise Exception
-
-    # print("Input sequence file name with extension: ")
-    dest_file_name = InstParameter.strForwardFqPath
-    # dest_file_name = os.path.join(BASE_DIR, dest_file_name)
-
-    if not os.path.isfile(dest_file_name):
-        print("File Not Found. Check it is in the src directory")
-        raise Exception
-
-    sample_name_token = InstParameter.strForwardFqPath.split('/')[-1].split('.')
-    sample_name = '.'.join(sample_name_token)
-
-    do(src_file_name, dest_file_name, sample_name, verbose=InstParameter.verbose)
-
-    # print("Extraction is completed.")
-    #
-    # logging.info('Program end : %s' % InstParameter.strForwardFqPath)
+    logger.info(f"Extraction for {sample} is done. {end - start}s elapsed.")
