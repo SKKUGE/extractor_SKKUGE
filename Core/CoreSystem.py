@@ -2,19 +2,20 @@ import csv
 import glob
 import logging
 import math
-import multiprocessing as mp
+import subprocess as sp
+import shlex
 import os
 import pathlib
 import pickle
 import re
-import subprocess as sp
 import sys
 from collections import defaultdict
 from datetime import datetime
 from pdb import set_trace
 from types import SimpleNamespace
+from concurrent.futures import ProcessPoolExecutor
 
-
+from extractor import main as extractor_main
 
 
 class Helper(object):
@@ -86,7 +87,7 @@ class Helper(object):
             logger.info("The file list is correct, pass\n")
 
     @staticmethod
-    def SplitSampleInfo(sample):
+    def SplitSampleInfo(sample):  # Deprecated
         # Sample\tReference\tGroup
         logging.info("[Deprecated] Processing sample : %s" % sample)
 
@@ -153,6 +154,7 @@ class SystemStructure(object):
         self.input_file_organizer = defaultdict(
             pathlib.Path
         )  # .fastq.gz #TODO: FLASh integration? https://ccb.jhu.edu/software/FLASH/
+        # should contain absolute path to the file
         self.output_sample_organizer = defaultdict(pathlib.Path)
 
         self.user_dir = Helper.mkdir_if_not("User" + "/" + self.user_name)
@@ -254,25 +256,35 @@ class ExtractorRunner:
         self.sample = sample
         self.args = args
 
-        for idx, file_path in enumerate([
-            p
-            for p in self.args.system_structure.input_sample_organizer[
-                self.sample
-            ].glob("*")
-        ]):
-            if file_path.suffix in [".fastq", ".fa", ".fq", ".fasta"]:
-                args.logger.info(f"File name : {file_path.stem}")
-                self.args.system_structure.input_file_organizer[file_path.name] = file_path
-                break
-            
-            if idx == len([
+        for idx, file_path in enumerate(
+            [
                 p
                 for p in self.args.system_structure.input_sample_organizer[
                     self.sample
                 ].glob("*")
-            ]) - 1:
+            ]
+        ):
+            # Load input file from input sample folder (only one file)
+            if file_path.suffix in [".fastq", ".fq", ".fastq.gz", ".fq.gz"]:
+                args.logger.info(f"File name : {file_path.stem}")
+                self.args.system_structure.input_file_organizer[self.sample] = (
+                    pathlib.Path.cwd() / file_path
+                )
+                break
+
+            if (
+                idx
+                == len(
+                    [
+                        p
+                        for p in self.args.system_structure.input_sample_organizer[
+                            self.sample
+                        ].glob("*")
+                    ]
+                )
+                - 1
+            ):
                 raise Exception("No fastq file in the sample folder")
-            
 
         # self.strInputList  => contains all splitted fastq file path; glob can be used
 
@@ -285,92 +297,33 @@ class ExtractorRunner:
 
         ### Defensive : original fastq wc == split fastq wc
         # intTotalLines = len(open(self.strInputFile).readlines())
-
-        # TODO: split into chunks based on lines instead of sequences
-        intTotalLines = int(
-            sp.check_output(
-                "wc -l {input_file}".format(input_file=self.strInputFile), shell=True
-            ).split()[0]
-        )
-        intSplitNum = int(
-            math.ceil(intTotalLines / float(self.args.chunk_size))
-        )  ## e.g. 15.4 -> 16
-
-        if intSplitNum == 0:
-            intSplitNum = 1
-        logging.info(
-            "Total lines:%s, Chunk size:%s, Split number:%s"
-            % (intTotalLines, self.args.chunk_size, intSplitNum)
-        )
-
-        ## Make minibatches of a single sequence file
-        ## self.strInputFile : self.strInputFile : ## './Input/JaeWoo/FASTQ/JaeWoo_test_samples/Test_sample/eCas9_rep1_D4.ext.fastq'
-        ## self.strInputList : self.strInputFile : ## './Input/JaeWoo/FASTQ/JaeWoo_test_samples/Test_sample/eCas9_rep1_D4.ext.txt'
-        with open(self.strInputFile) as fq, open(self.strInputList, "w") as OutList:
-
-            ## Batch processing
-            for intNum in range(1, intSplitNum + 1):
-
-                strSplitFile = (
-                    self.system_structure.seq_split_dir
-                    + "/{sample}_{num}.fq".format(
-                        sample=os.path.basename(self.strInputFile), num=intNum
-                    )
+        # https://docs.python.org/3.9/library/subprocess.html#security-considerations
+        sp.run(
+            shlex.split(
+                shlex.quote(
+                    f"split {self.args.system_structure.input_file_organizer[self.sample]} -l {4 * self.args.chunk_size} -d -a 3 --additional-suffix=.fastq {self.args.system_structure.seq_split_dir}/split_"
                 )
-                with open(strSplitFile, "w") as out:
-                    OutList.write(os.path.basename(strSplitFile) + "\n")
-                    intCount = 0
-
-                    for strRow in fq:
-                        intCount += 1
-                        out.write(strRow)
-
-                        if intCount == self.args.chunk_size:
-                            break
-
-        ## defensive
-        # strOriginal   = sp.check_output('wc -l {input_file}'.format(input_file=self.strInputFile), shell=True)
-        strSplited = sp.check_output(
-            "cat {splited}/*.fq | wc -l".format(
-                splited=self.system_structure.seq_split_dir
             ),
             shell=True,
+            check=True,
         )
-        # strOrigianlWc = strOriginal.split()[0]
-        intSplitedWc = int(strSplited.decode(encoding="utf-8").replace("\n", ""))
 
-        if intTotalLines != intSplitedWc:
-            logging.error(
-                "The number of total lines of splited file is not corresponded to origial fastq."
+        self.args.logger.info(
+            f"The number of split files:{len(list(self.args.system_structure.seq_split_dir.glob('*')))}"
+        )
+
+    def _populate_command(self):
+
+        return [
+            (
+                f"{self.sample}"
+                f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f}",
+                f"{self.args.system_structure.barcode_dir / self.args.barcode}",
+                f"{self.args.system_structure}",
             )
-            logging.error(
-                "Original FASTQ line number : %s, Splited FASTQ line number : %s"
-                % (intTotalLines, strSplited)
-            )
-            sys.exit(1)
-
-    def MakeExtractorCmd(self):
-
-        listCmd = []
-        strReverse = "None"
-
-        with open(self.strInputList) as Input:
-            for strFile in Input:
-                listFile = strFile.replace("\n", "").split(" ")
-                strForward = self.system_structure.seq_split_dir + "/" + listFile[0]
-
-                # if self.strPair == 'True':
-                #    strReverse = self.system_structure.seq_split_dir + '/' + listFile[1]
-
-                listCmd.append(
-                    ("{python} extractor.py {forw} {barcode} {verbose}").format(
-                        python=self.args.python,
-                        forw=strForward,
-                        barcode=self.args.system_structure.barcode,
-                        verbose=self.args.save_trace,
-                    )
-                )
-        return listCmd
+            for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
+            if f.endswith(".fastq")
+        ]
 
     def MakeOutput(self, listCmd, strSample):
         # TODO: magic keys; design changes can bring disaster
@@ -438,7 +391,7 @@ def system_struct_checker(func):
     def wrapper(args: SimpleNamespace):
 
         args.logger.info("Program start")
-        if mp.cpu_count() < args.multicore:
+        if os.cpu_count() < args.multicore:
             args.logger.warning(
                 f"Optimal threads <= {mp.cpu_count()} : {args.multicore} is not recommended"
             )
@@ -452,6 +405,7 @@ def system_struct_checker(func):
 
         func(args)
 
+        # TODO: check if all files are created
         args.logger.info("Check that all folder are well created.")
         Helper.CheckAllDone(InstInitFolder.strOutputProjectDir, listSamples)  # TODO
 
@@ -469,63 +423,22 @@ def run_pipeline(args: SimpleNamespace) -> None:
         args.logger.info("Splitting sequecnes into chunks")
         extractor_runner._split_into_chunks()
 
-        # Generating a command for utilizing Python multiprocessing
-        args.logger.info("MakeExtractorCmd")
-        listCmd = extractor_runner.MakeExtractorCmd()
+        args.logger.info("Populating command...")
+        listCmd = extractor_runner._populate_command()
 
         args.logger.info("RunMulticore")
-        RunMulticore(listCmd, args.multicore)  ## from CoreSystem.py
+        run_extractor_mp(listCmd, args.multicore, args.logger)
 
-        # Need Adaptation
+        # TODO
         args.logger.info("MakeOutput")
         extractor_runner.MakeOutput(listCmd, sample)
 
 
-def AttachSeqToIndel(
-    strSample, strBarcodeName, strIndelPos, strRefseq, strQueryseq, dictSub
-):
-    listIndelPos = strIndelPos.split("M")
-    intMatch = int(listIndelPos[0])
-
-    if "I" in strIndelPos:
-        intInsertion = int(listIndelPos[1].replace("I", ""))
-        strInDelSeq = strQueryseq[intMatch : intMatch + intInsertion]
-
-    elif "D" in strIndelPos:
-        intDeletion = int(listIndelPos[1].replace("D", ""))
-        strInDelSeq = strRefseq[intMatch : intMatch + intDeletion]
-
-    else:
-        logging.info(
-            "strIndelClass is included I or D. This variable is %s" % strIndelPos
-        )
-        raise Exception
-
-    strInDelPosSeq = strIndelPos + "_" + strInDelSeq
-
-    try:
-        _ = dictSub[strSample][strBarcodeName]
-    except KeyError:
-        dictSub[strSample][strBarcodeName] = {}
-
-    try:
-        dictSub[strSample][strBarcodeName][strBarcodeName + ":" + strInDelPosSeq][
-            "IndelCount"
-        ] += 1
-    except KeyError:
-        dictSub[strSample][strBarcodeName][strBarcodeName + ":" + strInDelPosSeq] = {
-            "IndelCount": 1
-        }
-
-
-def RunProgram(sCmd):
-    sp.call(sCmd, shell=False)
-
-
-def RunMulticore(lCmd, iCore):
+def run_extractor_mp(lCmd, iCore, logger) -> None:
     for sCmd in lCmd:
-        print(sCmd)
+        logger.info(f"Running {sCmd} command with {iCore} cores")
 
-    p = mp.Pool(iCore)
-    p.map_async(RunProgram, lCmd).get()
-    p.close()
+    with ProcessPoolExecutor(max_workers=iCore) as executor:
+        executor.map(extractor_main, lCmd)
+
+    logger.info(f"All extraction process completed")
