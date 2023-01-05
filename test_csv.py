@@ -1,7 +1,7 @@
-import Core.SelectBarcode as DataInput
+import Core.CoreSystem as CS
 
-RB = DataInput.ReadBarcode()
+RB = CS.ReadBarcode()
+exceldata = RB.SelectFromExcel()
 filedata = RB.UseCSV()
 print(RB.user, RB.project)
-exceldata = RB.SelectFromExcel()
-print(exceldata)
+print(RB.BarcodeList)

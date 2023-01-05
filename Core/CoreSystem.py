@@ -9,6 +9,7 @@ import pathlib
 import pickle
 import re
 import sys
+import pandas as pd
 from collections import defaultdict
 from datetime import datetime
 from pdb import set_trace
@@ -445,3 +446,30 @@ def run_extractor_mp(lCmd, iCore, logger) -> None:
         executor.map(extractor_main, lCmd)
 
     logger.info(f"All extraction process completed")
+
+
+#LBJ editing
+class ReadBarcode(object):
+
+    def __init__(self):
+        self.FilePath = ''
+        self.user = ''
+        self.project = ''
+        self.BarcodeList = pd.DataFrame()
+
+    def SelectFromExcel(self):
+
+        df = pd.read_excel('./User/library sorting_220627.xlsx', engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
+        out = df.loc[:, ['Gene name', 'Barcode sequence']]
+        self.BarcodeList = out
+        out.to_csv('./Input/input.csv', mode='a')
+        return out
+
+    def UseCSV(self):
+        f_csv = open('./Input/input.csv', 'r') #edit to pathlib later
+        f_read = csv.reader(f_csv)
+        csv_data = [line for line in f_read]
+        self.user = csv_data[0][0]
+        self.project = csv_data[0][1]
+
+        return csv_data
