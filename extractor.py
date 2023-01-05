@@ -13,6 +13,8 @@ import pickle
 import re
 import sys
 import time
+import pathlib
+import logging
 
 BASE_DIR = os.path.dirname(sys.executable)
 
@@ -36,7 +38,11 @@ def count_line_in_file(file_name):
     return count
 
 
-def do(dest_file_name, src_file_name, sample_name):
+def extract_read_cnts(
+    sample_name,
+    dest_file_name,
+    src_file_name,
+):
     start_time = time.time()
 
     # 프로그램 진행율을 계산하기 위해 파일의 라인수를 센다. --deprecated
@@ -187,35 +193,15 @@ def do(dest_file_name, src_file_name, sample_name):
     # print("--- %s seconds elapsed ---" % (time.time() - start_time))
 
 
-class clsParameter(object):
-    def __init__(self):
-
-        if len(sys.argv) > 1:
-            self.strForwardFqPath = sys.argv[1]
-            self.barcode = sys.argv[2]
-            self.verbose = sys.argv[3].lower() == "true"
-
-        else:
-            sManual = """
-            Usage:
-
-            """
-            print(sManual)
-            sys.exit()
-
-
 def main(*args):
-    (
+    (sample, sequence, barcode, logger) = args[0]
+
+    start = time.time()
+    extract_read_cnts(
         sample,
         sequence,
         barcode,
-    ) = args
+    )
+    end = time.time()
 
-    sample_name_token = strForwardFqPath.split("/")[-1].split(".")
-    sample_name = ".".join(sample_name_token)
-
-    do(sequence, barcode, sample_name)
-
-    # print("Extraction is completed.")
-    #
-    # logging.info('Program end : %s' % strForwardFqPath)
+    logger.info(f"Extraction for {sample} is done. {end - start}s elapsed.")

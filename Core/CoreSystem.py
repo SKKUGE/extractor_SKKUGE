@@ -316,10 +316,13 @@ class ExtractorRunner:
 
         return [
             (
-                f"{self.sample}"
-                f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f}",
-                f"{self.args.system_structure.barcode_dir / self.args.barcode}",
-                f"{self.args.system_structure}",
+                self.sample,
+                pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f,
+                pathlib.Path.cwd()
+                / self.args.system_structure.barcode_dir
+                / self.args.barcode,
+                
+                self.args.logger,
             )
             for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
             if f.endswith(".fastq")
