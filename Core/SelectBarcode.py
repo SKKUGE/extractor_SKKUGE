@@ -1,5 +1,6 @@
 import pandas as pd
 import csv
+import re
 class ReadBarcode(object):
 
     def __init__(self):
@@ -13,7 +14,10 @@ class ReadBarcode(object):
         f.close()
 
     def SelectFromExcel(self):
-        df = pd.read_excel('./User/barcode.xlsx') #edit to pathlib later
+        df = pd.read_excel('./User/library sorting_220627.xlsx', engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
+        out = df.loc[:, ['Gene name', 'Barcode sequence']]
+
+        return out
 
     def UseCSV(self):
         f_csv = open('./Input/input.csv', 'r') #edit to pathlib later
