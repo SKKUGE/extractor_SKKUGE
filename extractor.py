@@ -197,11 +197,13 @@ def main(*args):
     (sample, sequence, barcode, logger) = args[0]
 
     start = time.time()
-    extract_read_cnts(
-        sample,
-        sequence,
-        barcode,
-    )
+    # extract_read_cnts(
+    #     sample,
+    #     sequence,
+    #     barcode,
+    # )
     end = time.time()
 
     logger.info(f"Extraction for {sample} is done. {end - start}s elapsed.")
+
+    return f"here is the result: {sequence}"

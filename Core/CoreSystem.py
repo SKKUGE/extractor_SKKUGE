@@ -321,7 +321,6 @@ class ExtractorRunner:
                 pathlib.Path.cwd()
                 / self.args.system_structure.barcode_dir
                 / self.args.barcode,
-                
                 self.args.logger,
             )
             for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
@@ -441,7 +440,9 @@ def run_extractor_mp(lCmd, iCore, logger) -> None:
     for sCmd in lCmd:
         logger.info(f"Running {sCmd} command with {iCore} cores")
 
+    result = []
     with ProcessPoolExecutor(max_workers=iCore) as executor:
-        executor.map(extractor_main, lCmd)
+        for rval in executor.map(extractor_main, lCmd):
+            result.append(rval)
 
     logger.info(f"All extraction process completed")
