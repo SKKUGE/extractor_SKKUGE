@@ -455,21 +455,37 @@ class ReadBarcode(object):
         self.FilePath = ''
         self.user = ''
         self.project = ''
+        self.cas_type = ''
+        self.index = ''
+        self.poly_t = 0
+
         self.BarcodeList = pd.DataFrame()
 
     def SelectFromExcel(self):
 
-        df = pd.read_excel('./User/library sorting_220627.xlsx', engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
-        out = df.loc[:, ['Gene name', 'Barcode sequence']]
+        df = pd.read_excel('./User/Barcode Database.xlsx', engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
+        out = df.loc[:, ['Nuc type', 'INDEX', 'Gene name', 'Barcode sequence']]
         self.BarcodeList = out
-        out.to_csv('./Input/input.csv', mode='a')
         return out
 
     def UseCSV(self):
         f_csv = open('./Input/input.csv', 'r') #edit to pathlib later
         f_read = csv.reader(f_csv)
         csv_data = [line for line in f_read]
-        self.user = csv_data[0][0]
-        self.project = csv_data[0][1]
+        self.user = csv_data[1][0]              #user_name in CSV file
+        self.project = csv_data[1][1]           #project_name in CSV file
+        self.cas_type = csv_data[1][2]          #cas_type in CSV file
+        self.index = csv_data[1][3]             #index in CSV file
+        self.poly_t = csv_data[1][4]            #poly-T length in CSV file
+        Barcode_temp = pd.DataFrame()
+        self.BarcodeList = self.BarcodeList[self.BarcodeList['Nuc type'] == self.cas_type]  #DataFrame filter by nuclease type, ex.Cas9 or TnpB
+        self.BarcodeList = self.BarcodeList[self.BarcodeList['INDEX'] == self.index]        #DataFrame filter by index
 
-        return csv_data
+        for gene in csv_data[3:] :
+            if(gene[0]==''):
+                break
+            Barcode_temp = pd.concat([Barcode_temp,self.BarcodeList[self.BarcodeList['Gene name'].str.contains(gene[0])]])
+        
+        Barcode_temp['Barcode sequence'] = 'T'*int(self.poly_t) + Barcode_temp['Barcode sequence'].astype(str)
+
+        return Barcode_temp
