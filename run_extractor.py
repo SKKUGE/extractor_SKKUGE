@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.getcwd()))
 from Core.CoreSystem import (
     SystemStructure,
     Helper,
+    ReadBarcode,
     run_pipeline,
 )
 
@@ -73,6 +74,12 @@ def main():
     parser.add_argument("--dev", action="store_true", help="development mode")
     args = parser.parse_args()
 
+    read_b = ReadBarcode()
+    excel = read_b.SelectFromExcel()
+    barcode_data = read_b.UseCSV()
+    args.user_name = read_b.user
+    args.project_name = read_b.project
+    print(args.user_name, args.project_name, barcode_data)
     system_structure = SystemStructure(args.user_name, args.project_name)
 
     # Prepare logger

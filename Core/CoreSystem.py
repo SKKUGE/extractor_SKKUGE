@@ -397,7 +397,7 @@ def system_struct_checker(func):
         args.logger.info("Program start")
         if os.cpu_count() < args.multicore:
             args.logger.warning(
-                f"Optimal threads <= {mp.cpu_count()} : {args.multicore} is not recommended"
+                f"Optimal threads <= {sp.cpu_count()} : {args.multicore} is not recommended"
             )
         for key, value in sorted(vars(args).items()):
             args.logger.info(f"Argument {key}: {value}")
