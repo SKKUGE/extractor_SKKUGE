@@ -8,7 +8,7 @@ __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
 import os
-import pickle
+
 import re
 import sys
 import time
