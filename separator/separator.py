@@ -45,6 +45,7 @@ def sep(file):
                 f"{file.split('.')[0]}_F{idx + 1}.{file.split('.')[1]}.fastq",
                 frag[0].values,
                 fmt="%s",
+                newline=""
             )
 
             print(f"{file.split('.')[0]}_F{idx + 1}.{file.split('.')[1]}.fastq saved")
