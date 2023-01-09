@@ -464,28 +464,20 @@ class ReadBarcode(object):
     def SelectFromExcel(self):
 
         df = pd.read_excel('./User/Barcode Database.xlsx', engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
-        out = df.loc[:, ['Nuc type', 'INDEX', 'Gene name', 'Barcode sequence']]
+        out = df.loc[:, ['Gene name', 'Barcode sequence']]
         self.BarcodeList = out
         return out
 
     def UseCSV(self):
-        f_csv = open('./Input/input.csv', 'r') #edit to pathlib later
-        f_read = csv.reader(f_csv)
-        csv_data = [line for line in f_read]
-        self.user = csv_data[1][0]              #user_name in CSV file
-        self.project = csv_data[1][1]           #project_name in CSV file
-        self.cas_type = csv_data[1][2]          #cas_type in CSV file
-        self.index = csv_data[1][3]             #index in CSV file
-        self.poly_t = csv_data[1][4]            #poly-T length in CSV file
-        Barcode_temp = pd.DataFrame()
-        self.BarcodeList = self.BarcodeList[self.BarcodeList['Nuc type'] == self.cas_type]  #DataFrame filter by nuclease type, ex.Cas9 or TnpB
-        self.BarcodeList = self.BarcodeList[self.BarcodeList['INDEX'] == self.index]        #DataFrame filter by index
+        f_csv = pd.read_csv('./Input/input.csv') #edit to pathlib later
+        self.user = f_csv.at[0,'user_name']
+        self.project = f_csv.at[0,'project_name']
+        self.poly_t = f_csv.at[0, 'poly-T length']
+        f_csv['user_name'] = self.user
+        f_csv['project_name'] = self.project
+        f_csv['poly-T length'] = self.poly_t
 
-        for gene in csv_data[3:] :
-            if(gene[0]==''):
-                break
-            Barcode_temp = pd.concat([Barcode_temp,self.BarcodeList[self.BarcodeList['Gene name'].str.contains(gene[0])]])
         
-        Barcode_temp['Barcode sequence'] = 'T'*int(self.poly_t) + Barcode_temp['Barcode sequence'].astype(str)
+        print(self.user, self.project)
 
-        return Barcode_temp
+        return f_csv
