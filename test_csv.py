@@ -3,5 +3,4 @@ import pandas as pd
 RB = CS.ReadBarcode()
 exceldata = RB.SelectFromExcel()
 filedata = RB.UseCSV()
-print(RB.user, RB.project)
-print(filedata)
+print(filedata.drop_duplicates(['Gene name']))

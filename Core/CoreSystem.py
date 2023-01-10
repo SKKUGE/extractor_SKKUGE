@@ -455,29 +455,37 @@ class ReadBarcode(object):
         self.FilePath = ''
         self.user = ''
         self.project = ''
-        self.cas_type = ''
         self.index = ''
-        self.poly_t = 0
 
         self.BarcodeList = pd.DataFrame()
 
     def SelectFromExcel(self):
 
-        df = pd.read_excel('./User/Barcode Database.xlsx', engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
+        df = pd.read_excel(
+            pathlib.Path("User" + "/" + self.user + "/" + f"Barcode Database.xlsx"), engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
         out = df.loc[:, ['Gene name', 'Barcode sequence']]
         self.BarcodeList = out
         return out
 
     def UseCSV(self):
-        f_csv = pd.read_csv('./Input/input.csv') #edit to pathlib later
+        f_csv = pd.read_csv(pathlib.Path("Input" + "/" + f"input.csv")) #edit to pathlib later
         self.user = f_csv.at[0,'user_name']
         self.project = f_csv.at[0,'project_name']
-        self.poly_t = f_csv.at[0, 'poly-T length']
-        f_csv['user_name'] = self.user
-        f_csv['project_name'] = self.project
-        f_csv['poly-T length'] = self.poly_t
+        print(f_csv)
+        Barcode_temp = pd.DataFrame([], columns=['user_name','project_name','Gene name','Barcode sequence'])
+        print(Barcode_temp)
 
-        
-        print(self.user, self.project)
+        for gene_name in f_csv['Gene name']:
+            temp = self.BarcodeList[self.BarcodeList['Gene name'] == gene_name]
+            Barcode_temp = pd.concat([Barcode_temp,temp])
 
-        return f_csv
+        #for gene_set in f_csv['gene set'] :
+        #    temp = self.BarcodeList[self.BarcodeList['Gene name'].str.contains(gene_set)]
+        #    Barcode_temp = pd.concat([Barcode_temp,temp])
+
+        Barcode_temp['user_name'] = self.user
+        Barcode_temp['project_name'] = self.project
+        #Barcode_temp['Barcode sequence'] = 'T'*int(self.poly_t) + Barcode_temp['Barcode sequence'].astype(str)
+
+        print(Barcode_temp)
+        return Barcode_temp
