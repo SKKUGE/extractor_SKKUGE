@@ -1,18 +1,11 @@
-import csv
-import glob
 import logging
-import math
 import subprocess as sp
 import multiprocessing as mp
 import shlex
 import os
 import pathlib
-import pickle
-import re
 import sys
 from collections import defaultdict
-from datetime import datetime
-from pdb import set_trace
 from types import SimpleNamespace
 from concurrent.futures import ProcessPoolExecutor
 
@@ -207,14 +200,12 @@ class ExtractorRunner:
 
         return [
             (
-                self.sample,
                 str(pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f),
                 str(
                     pathlib.Path.cwd()
                     / self.args.system_structure.barcode_dir
                     / self.args.barcode
                 ),
-                self.args.system_structure,
                 self.args.logger,
             )
             for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
