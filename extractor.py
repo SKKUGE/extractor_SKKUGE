@@ -7,10 +7,6 @@
 __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
-import os
-
-import re
-import sys
 import time
 import pathlib
 
@@ -20,29 +16,10 @@ import skbio
 
 from Core.CoreSystem import SystemStructure
 
-# BASE_DIR = os.path.dirname(sys.executable)
-
-# # for debug
-# BASE_DIR = os.path.dirname(os.path.realpath(__file__))
-
-
-def seq_validator(data):
-    m = re.findall(r"^[A|a|T|t|C|c|G|g]+$", data)
-    return m[0] if m else None
-
-
-def count_line_in_file(file_name):
-    count = 0
-    for line in open(file_name, "r"):
-        count += 1
-    return count
-
 
 def extract_read_cnts(
-    sample_name: str,
     sequence_file: pathlib.Path,
     barcode_file: pathlib.Path,
-    system_structure: SystemStructure,
 ) -> pd.DataFrame:
     # df index == barcode, column == read count
 
@@ -80,12 +57,12 @@ def extract_read_cnts(
 
 
 def main(*args) -> pd.DataFrame:
-    (sample, sequence, barcode, system_structure, logger) = args[0]
+    (sequence, barcode, logger) = args[0]
 
     start = time.time()
-    rval = extract_read_cnts(sample, sequence, barcode, system_structure)
+    rval = extract_read_cnts(sequence, barcode)
     end = time.time()
 
-    logger.info(f"Extraction for {sample} is done. {end - start}s elapsed.")
+    logger.info(f"Extraction is done. {end - start}s elapsed.")
 
     return rval
