@@ -256,7 +256,7 @@ class ExtractorRunner:
         sp.run(
             shlex.split(
                 shlex.quote(
-                    f"split {self.args.system_structure.input_file_organizer[self.sample]} -l {4 * self.args.chunk_size} -d -a 3 --additional-suffix=.fastq {self.args.system_structure.seq_split_dir}/split_"
+                    f"split {self.args.system_structure.input_file_organizer[self.sample]} -l {4 * self.args.chunk_size} -d -a 6 --additional-suffix=.fastq {self.args.system_structure.seq_split_dir}/split_"
                 )
             ),
             shell=True,
@@ -272,10 +272,10 @@ class ExtractorRunner:
         return [
             (
                 self.sample,
-                pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f,
-                pathlib.Path.cwd()
+                str(pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f),
+                str(pathlib.Path.cwd()
                 / self.args.system_structure.barcode_dir
-                / self.args.barcode,
+                / self.args.barcode),
                 self.args.system_structure,
                 self.args.logger,
             )
