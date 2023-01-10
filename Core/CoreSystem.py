@@ -3,6 +3,7 @@ import glob
 import logging
 import math
 import subprocess as sp
+import multiprocessing as mp
 import shlex
 import os
 import pathlib
@@ -91,53 +92,6 @@ class Helper(object):
         # Sample\tReference\tGroup
         logging.info("[Deprecated] Processing sample : %s" % sample)
 
-    @staticmethod  ## defensive
-    def CheckAllDone(strOutputProject, listSamples):
-        intProjectNumInOutput = len(
-            [
-                i
-                for i in sp.check_output("ls %s" % strOutputProject, shell=False).split(
-                    "\n"
-                )
-                if i not in ["All_results", "Log", ""]
-            ]
-        )
-
-        if intProjectNumInOutput != len(listSamples):
-            logging.warning(
-                "The number of samples in the output folder and in the project list does not matched."
-            )
-            logging.warning(
-                "Output folder: %s, Project list samples: %s\n"
-                % (intProjectNumInOutput, len(listSamples))
-            )
-        else:
-            logging.info("All output folders have been created.\n")
-
-    @staticmethod
-    def CheckIntegrity(strBarcodeFile, strSeq):  ## defensive
-        rec = re.compile(r"[A|C|G|T|N]")
-
-        if ":" in strSeq:
-            strSeq = strSeq.split(":")[1]
-
-        strNucle = re.findall(rec, strSeq)
-        if len(strNucle) != len(strSeq):
-            logging.error(
-                "This sequence is not suitable, check A,C,G,T,N are used only : %s"
-                % strBarcodeFile
-            )
-            set_trace()
-            sys.exit(1)
-
-    @staticmethod
-    def PreventFromRmMistake(strCmd):
-        rec = re.compile(
-            r"rm.+-rf*.+(\.$|\/$|\*$|User$|Input$|Output$)"
-        )  ## This reg can prevent . / * ./User User ...
-        if re.findall(rec, strCmd):
-            raise Exception("%s is critical mistake! never do like this." % strCmd)
-
 
 # > The class creates a directory structure for a user and a project
 class SystemStructure(object):
@@ -173,17 +127,6 @@ class SystemStructure(object):
             "Output" + "/" + self.user_name + "/" + self.project_name
         )
 
-        self.log_dir = Helper.mkdir_if_not(self.output_dir / "Log")
-
-        self.log = (
-            self.log_dir
-            / f"{str(datetime.now()).replace('-', '_').replace(':', '_').replace(' ', '_').split('.')[0]}_log.txt"
-        )
-
-        if not self.log.exists():
-            with open(self.log, "w") as f:
-                f.write("")
-
     def mkdir_sample(self, sample_name: str):
         # TODO
         self.input_sample_organizer[sample_name] = Helper.mkdir_if_not(
@@ -192,21 +135,15 @@ class SystemStructure(object):
         self.output_sample_organizer[sample_name] = Helper.mkdir_if_not(
             self.output_dir / sample_name
         )
-
-        self.tmp_dir = Helper.mkdir_if_not(
-            self.output_sample_organizer[sample_name] / "Tmp"
-        )
-        self.pkl_dir = Helper.mkdir_if_not(self.tmp_dir / "Pickle")
         self.result_dir = Helper.mkdir_if_not(
             self.output_sample_organizer[sample_name] / "Result"
         )
-        self.all_result_dir = Helper.mkdir_if_not(self.result_dir / "All_results")
+
 
 class ExtractorRunner:
     def __init__(self, sample: str, args: SimpleNamespace):
-        args.python = (
-            sys.executable if args.python is None else args.python
-        )  # Find python executable if not specified
+        args.python = sys.executable
+        # Find python executable if not specified
         args.system_structure.mkdir_sample(sample)
         self.sample = sample
         self.args = args
@@ -251,7 +188,6 @@ class ExtractorRunner:
     def _split_into_chunks(self):
 
         ### Defensive : original fastq wc == split fastq wc
-        # intTotalLines = len(open(self.strInputFile).readlines())
         # https://docs.python.org/3.9/library/subprocess.html#security-considerations
         sp.run(
             shlex.split(
@@ -273,9 +209,11 @@ class ExtractorRunner:
             (
                 self.sample,
                 str(pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f),
-                str(pathlib.Path.cwd()
-                / self.args.system_structure.barcode_dir
-                / self.args.barcode),
+                str(
+                    pathlib.Path.cwd()
+                    / self.args.system_structure.barcode_dir
+                    / self.args.barcode
+                ),
                 self.args.system_structure,
                 self.args.logger,
             )
@@ -283,71 +221,11 @@ class ExtractorRunner:
             if f.endswith(".fastq")
         ]
 
-    def MakeOutput(self, listCmd, strSample):
-        # TODO: magic keys; design changes can bring disaster
-        forw = (
-            listCmd[0].split("/")[-3].split(" ")[0].split(".")[0]
-        )  # Barcode files are relocated to "./Barcodes" directory
-
-        RESULT_DIR = f"./Results/temp/{forw}"
-        OUTPUT_DIR = "./Results/All_results"
-
-        if not os.path.exists(OUTPUT_DIR):
-            os.makedirs(OUTPUT_DIR)
-
-        # Get temp file names from the list of commands
-
-        # sample_name == ./temp/sequence.fastq_1.fq_result_info.txt
-
-        counts = glob.glob(
-            os.path.join(RESULT_DIR, "*.txt")
-        )  # find all temporary read count files
-        findings = glob.glob(
-            os.path.join(RESULT_DIR, "*.trace")
-        )  # find all temporary saved sequence files
-
-        # Initialize internal data object to add data segments
-        barcode_dict_for_counts = defaultdict(int)
-        list_for_findings = []
-
-        # Sum up the counts
-        for item in counts:
-            # Open summary file from each dir
-            with open(item, "r") as f:
-                for line in f:
-                    # TODO: processivity improvement with map()
-                    # "Barcode" : "count"
-                    line_tokens = line.split(":")
-                    if len(line_tokens) > 1:
-                        barcode = line_tokens[0].strip()
-                        cnt = int(line_tokens[1].strip())
-                        barcode_dict_for_counts[barcode] += cnt
-
-        with open(f"{OUTPUT_DIR}/{strSample}_Summary.txt", "w") as summary:
-            for barcode, count in barcode_dict_for_counts.items():
-                summary.write(f"{barcode} : {count}\n")
-
-        # Gathering the sequence findings
-        if self.args.save_trace:
-            for item in findings:
-                with open(item, "rb") as fp:
-                    pkl_obj = pickle.load(fp)
-                    list_for_findings.extend(pkl_obj)
-
-            with open(f"{OUTPUT_DIR}/{strSample}_Verbose.csv", "w") as verbose:
-                csv_out = csv.writer(verbose)
-                csv_out.writerow(("Barcode", "Sequence"))
-                for tup in list_for_findings:
-                    csv_out.writerow(tup)
-
-        # Remove all intermediate files
-
-        # sp.call('rm -r ./Results/temp/', shell=True)
-
 
 def system_struct_checker(func):
     def wrapper(args: SimpleNamespace):
 
+        args.multicore = os.cpu_count() if args.multicore == 0 else args.multicore
         args.logger.info("Program start")
         if os.cpu_count() < args.multicore:
             args.logger.warning(
@@ -362,10 +240,7 @@ def system_struct_checker(func):
         )
 
         func(args)
-
-        # TODO: check if all files are created
-        args.logger.info("Check that all folder are well created.")
-        Helper.CheckAllDone(InstInitFolder.strOutputProjectDir, listSamples)  # TODO
+        args.logger.info("Extraction process completed.")
 
     return wrapper
 
@@ -385,11 +260,9 @@ def run_pipeline(args: SimpleNamespace) -> None:
         listCmd = extractor_runner._populate_command()
 
         args.logger.info("RunMulticore")
-        run_extractor_mp(listCmd, args.multicore, args.logger)
-
-        # TODO
-        args.logger.info("MakeOutput")
-        extractor_runner.MakeOutput(listCmd, sample)
+        run_extractor_mp(listCmd, args.multicore, args.logger).to_csv(
+            f"{args.system_structure.result_dir}/{sample}+extraction_result.csv"
+        )
 
 
 def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
@@ -399,11 +272,14 @@ def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
         logger.info(f"Running {sCmd} command with {iCore} cores")
 
     result = []
-    df = pd.DataFrame()
     with ProcessPoolExecutor(max_workers=iCore) as executor:
         for rval in executor.map(extractor_main, lCmd):
             result.append(rval)
+    logger.info(f"All extra tion subprocesses completed")
+    logger.info(f"Merging extraction results...")
 
-    logger.info(f"All extraction process completed")
+    df = result.pop()
+    for d in result:
+        df["Read_counts"] = df["Read_counts"] + d["Read_counts"]
 
     return df

@@ -13,7 +13,7 @@
       "justMyCode": true,
       "args": [
         "-t",
-        "1",
+        "16",
         "-c",
         "100",
         "-u",
@@ -21,8 +21,7 @@
         "-p",
         "test_proj",
         "--barcode",
-        "test_barcode.txt",
-        "--dev"
+        "test_barcode.txt"
       ]
     }
   ]
