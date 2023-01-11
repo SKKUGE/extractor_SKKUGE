@@ -76,9 +76,9 @@ def main():
 
     read_b = ReadBarcode()
     excel = read_b.SelectFromExcel()
-    barcode_data = read_b.UseCSV()
-    args.user_name = read_b.user
-    args.project_name = read_b.project
+    barcode_data = read_b.UseExcel()
+    args.user_name = input('Enter User name : ')
+    args.project_name = input('Enter Project name : ')
     print(args.user_name, args.project_name, barcode_data)
     system_structure = SystemStructure(args.user_name, args.project_name)
 

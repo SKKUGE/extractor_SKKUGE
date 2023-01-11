@@ -463,29 +463,53 @@ class ReadBarcode(object):
 
         df = pd.read_excel(
             pathlib.Path("User" + "/" + self.user + "/" + f"Barcode Database.xlsx"), engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
-        out = df.loc[:, ['Gene name', 'Barcode sequence']]
-        self.BarcodeList = out
-        return out
+        #out = df.loc[:, ['Gene name', 'Barcode sequence']]
+        self.BarcodeList = df
+        return df
 
     def UseCSV(self):
         f_csv = pd.read_csv(pathlib.Path("Input" + "/" + f"input.csv")) #edit to pathlib later
         self.user = f_csv.at[0,'user_name']
         self.project = f_csv.at[0,'project_name']
-        print(f_csv)
         Barcode_temp = pd.DataFrame([], columns=['user_name','project_name','Gene name','Barcode sequence'])
-        print(Barcode_temp)
 
         for gene_name in f_csv['Gene name']:
-            temp = self.BarcodeList[self.BarcodeList['Gene name'] == gene_name]
+            temp = self.BarcodeList[self.BarcodeList['Gene name'] == gene_name].copy()
+            temp = temp.loc[:, ['Gene name', 'Barcode sequence']]
             Barcode_temp = pd.concat([Barcode_temp,temp])
 
         #for gene_set in f_csv['gene set'] :
-        #    temp = self.BarcodeList[self.BarcodeList['Gene name'].str.contains(gene_set)]
+        #    temp = self.BarcodeList[self.BarcodeList['Gene name'].str.contains(gene_set)].copy()
         #    Barcode_temp = pd.concat([Barcode_temp,temp])
 
         Barcode_temp['user_name'] = self.user
         Barcode_temp['project_name'] = self.project
         #Barcode_temp['Barcode sequence'] = 'T'*int(self.poly_t) + Barcode_temp['Barcode sequence'].astype(str)
 
-        print(Barcode_temp)
+        #print(Barcode_temp)
         return Barcode_temp
+
+    def UseExcel(self):
+        db = self.BarcodeList.copy()
+        num=0
+        for index in db.columns :
+            print(num,index)
+            num=num+1
+        col_num = list(map(int,input('select columns to use (ex:0 1 3 7)').split()))
+        db = db.iloc[:, col_num]
+        print(db)
+        for option in db.columns:
+            temp = db[option]
+            temp = temp.drop_duplicates().reset_index(drop = True)
+            print(temp)
+            
+            condition = input('select rows to use (ex:0 1 3 7)')
+            if(condition == '*'):
+                continue
+            condition = list(map(int, condition.split()))
+            print(condition)
+            #delete = temp.drop(index = condition).index
+            options = temp[temp.index.isin(condition)].values
+            db = db[db[option].isin(options)]
+        print(db)
+        return db
