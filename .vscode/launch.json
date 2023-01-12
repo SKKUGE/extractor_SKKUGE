@@ -14,13 +14,14 @@
       "args": [
         "-t",
         "16",
+        "-c",
+        "100",
         "-u",
         "JU",
         "-p",
         "test_proj",
         "--barcode",
-        "test_barcode.txt",
-        "--dev"
+        "test_barcode.txt"
       ]
     }
   ]
