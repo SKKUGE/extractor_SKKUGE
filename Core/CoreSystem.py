@@ -1,273 +1,276 @@
 import logging
-import os
-import re
 import subprocess as sp
+import multiprocessing as mp
+import shlex
+import os
+import pathlib
 import sys
-from pdb import set_trace
+from collections import defaultdict
+from types import SimpleNamespace
+from concurrent.futures import ProcessPoolExecutor
 
-import numpy as np
-import parmap
+import pandas as pd
 
 
 class Helper(object):
+    @staticmethod
+    def mkdir_if_not(directory: str) -> pathlib.Path:
+        """
+        > If the directory doesn't exist, create it
+
+        :param directory: The directory to create
+        :type directory: str
+        :return: A path object
+        """
+        path = pathlib.Path(directory)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     @staticmethod
-    def MakeFolderIfNot(strDir):
-        if not os.path.isdir(strDir): os.makedirs(strDir)
+    def load_samples(dir: pathlib.Path) -> list:
+        """
+        It reads a file and returns a list of non-empty lines that don't start with a hash
 
-    @staticmethod
-    def RemoveNullAndBadKeyword(Sample_list):
-        listSamples = [strRow for strRow in Sample_list.readlines() if
-                       strRow not in ["''", '', '""', '\n', '\r', '\r\n'] and strRow[0] != '#']
-        return listSamples
+        :param dir: the directory of the samples file
+        :type dir: pathlib.Path
+        :return: A list of samples.
+        """
+        with open(dir, "r") as file:
+            sample_list = [
+                sample
+                for sample in list(
+                    filter(None, map(str.strip, file.read().split("\n")))
+                )
+                if sample[0] != "#"
+            ]
+
+        return sample_list
 
     @staticmethod  ## defensive
-    def CheckSameNum(strInputProject, listSamples):
+    def equal_num_samples_checker(
+        proj_path: pathlib.Path, loaded_samples: list, logger
+    ):
+        """
+        > This function checks if the number of samples in the Input folder and in the User folder
+        matches
 
-        listProjectNumInInput = [i for i in
-                                 sp.check_output('ls %s' % strInputProject, shell=True).decode(encoding="utf-8").split(
-                                     '\n') if
-                                 i != '']
+        :param proj_path: pathlib.Path, loaded_samples: list, logger
+        :type proj_path: pathlib.Path
+        :param loaded_samples: a list of sample names
+        :type loaded_samples: list
+        :param logger: a logger object
+        """
 
-        setSamples = set(listSamples)
-        setProjectNumInInput = set(listProjectNumInInput)
+        if len(list(proj_path.glob("*"))) != len(loaded_samples):
+            logger.warning(
+                "The number of samples in the Input folder and in the User folder does not matched."
+            )
 
-        intProjectNumInTxt = len(listSamples)
-        intProjectNumInInput = len(listProjectNumInInput)
-
-        if intProjectNumInTxt != len(setSamples - setProjectNumInInput):
-            logging.warning('The number of samples in the input folder and in the project list does not matched.')
-            logging.warning('Input folder: %s, Project list samples: %s' % (intProjectNumInInput, intProjectNumInTxt))
-            raise AssertionError
+            input_entries = [i.name for i in proj_path.glob("*")]
+            user_entries = [i for i in loaded_samples]
+            logger.warning(
+                f"Input folder: {len(list(proj_path.glob('*')))}, Project list samples: {len(loaded_samples)}"
+            )
+            logger.warning(
+                f"Input folder: {[i for i in input_entries if i not in user_entries]}"
+            )
+            logger.warning(
+                f"Project list samples: {[u for u in user_entries if u not in input_entries]}"
+            )
         else:
-            logging.info('The file list is correct, pass\n')
+            logger.info("The file list is correct, pass\n")
 
     @staticmethod
-    def SplitSampleInfo(strSample):
-
-        if strSample[0] == '#': return False
-        logging.info('Processing sample : %s' % strSample)
-        lSampleRef = strSample.replace('\n', '').replace('\r', '').replace(' ', '').split('\t')
-
-        if len(lSampleRef) == 1:
-            strSample = lSampleRef[0]
-            return strSample
-
-        else:
-            logging.error('Confirm the file format is correct. -> Sample name\tReference name\tGroup')
-            logging.error('Sample list input : %s\n' % lSampleRef)
-            raise Exception
-
-    @staticmethod
-    def CheckIntegrity(strBarcodeFile, strSeq):  ## defensive
-        rec = re.compile(r'[A|C|G|T|N]')
-
-        if ':' in strSeq:
-            strSeq = strSeq.split(':')[1]
-
-        strNucle = re.findall(rec, strSeq)
-        if len(strNucle) != len(strSeq):
-            logging.error('This sequence is not suitable, check A,C,G,T,N are used only : %s' % strBarcodeFile)
-            set_trace()
-            sys.exit(1)
-
-    @staticmethod
-    def PreventFromRmMistake(strCmd):
-        rec = re.compile(r'rm.+-rf*.+(\.$|\/$|\*$|User$|Input$|Output$)')  ## This reg can prevent . / * ./User User ...
-        if re.findall(rec, strCmd):
-            raise Exception('%s is critical mistake! never do like this.' % strCmd)
+    def SplitSampleInfo(sample):  # Deprecated
+        # Sample\tReference\tGroup
+        logging.info("[Deprecated] Processing sample : %s" % sample)
 
 
-class InitialFolder(object):
+# > The class creates a directory structure for a user and a project
+class SystemStructure(object):
+    def __init__(
+        self,
+        user_name: str,
+        project_name: str,
+    ):
+        # https://www.notion.so/dengardengarden/s-Daily-Scrum-Reports-74d406ce961c4af78366a201c1933b66#cd5b57433eca4c6da36145d81adbbe5e
+        self.user_name = user_name
+        self.project_name = project_name
+        self.project_samples_path = ""
+        self.input_sample_organizer = defaultdict(pathlib.Path)
+        self.input_file_organizer = defaultdict(
+            pathlib.Path
+        )  # .fastq.gz #TODO: FLASh integration? https://ccb.jhu.edu/software/FLASH/
+        # should contain absolute path to the file
+        self.output_sample_organizer = defaultdict(pathlib.Path)
 
-    def __init__(self, strUser, strProject, strProgram):
-        self.strUser = strUser
-        self.strProject = strProject
-        self.strProgram = strProgram
+        self.user_dir = Helper.mkdir_if_not("User" + "/" + self.user_name)
+        self.barcode_dir = Helper.mkdir_if_not("Barcodes")
+        self.input_dir = Helper.mkdir_if_not(
+            "Input" + "/" + self.user_name + "/" + self.project_name
+        )
+        self.project_samples_path = pathlib.Path(
+            "User" + "/" + self.user_name + "/" + f"{self.project_name}.txt"
+        )
+        if not self.project_samples_path.exists():
+            with open(self.project_samples_path, "w") as f:
+                f.write("")
 
-    def MakeDefaultFolder(self):
-        Helper.MakeFolderIfNot('Input')
-        Helper.MakeFolderIfNot('Output')
-        Helper.MakeFolderIfNot('User')
+        self.output_dir = Helper.mkdir_if_not(
+            "Output" + "/" + self.user_name + "/" + self.project_name
+        )
 
-    def MakeInputFolder(self):
-        ## './Input/JaeWoo'
-        strUserInputDir = './Input/{user}'.format(user=self.strUser)
-        Helper.MakeFolderIfNot(strUserInputDir)
-
-        if self.strProgram == 'Run_extractor.py':
-            ## './Input/JaeWoo/FASTQ'
-            strUserFastqDir = os.path.join(strUserInputDir, 'FASTQ')
-            Helper.MakeFolderIfNot(strUserFastqDir)
-
-        else:
-            print('CoreSystem.py -> CoreSystem error, check the script.')
-            raise Exception
-
-        ## './Input/JaeWoo/FASTQ/JaeWoo_test_samples'
-        strUserProjectDir = os.path.join(strUserFastqDir, self.strProject)
-        Helper.MakeFolderIfNot(strUserProjectDir)
-
-        ## './Input/JaeWoo/Reference'
-        strUserReference = os.path.join(strUserInputDir, 'Reference')
-        Helper.MakeFolderIfNot(strUserReference)
-
-        ## './Input/JaeWoo/Reference/JaeWoo_test_samples'
-        strUserRefProject = os.path.join(strUserReference, self.strProject)
-        Helper.MakeFolderIfNot(strUserRefProject)
-
-        ## './User/JaeWoo'
-        strUserDir = './User/{user}'.format(user=self.strUser)
-        Helper.MakeFolderIfNot(strUserDir)
-
-        ## '> ./User/JaeWoo/Test_samples.txt'
-        self.strProjectFile = os.path.join(strUserDir, self.strProject + '.txt')
-        if not os.path.isfile(self.strProjectFile):
-            sp.call('> ' + self.strProjectFile, shell=True)
-
-
-class UserFolderAdmin(object):
-    """
-    InitialFolder : out of the loop
-    UserFolderAdmin : in the loop
-
-    So InitialFolder and UserFolderAdmin must be distinguished.
-    """
-
-    def __init__(self, strSample, options):
-        self.strSample = strSample
-
-        self.strUser = options.user_name
-        self.strProject = options.project_name
-
-        self.intCore = options.multicore
-
-        self.strOutProjectDir = ''
-        self.strOutSampleDir = ''
-        self.strRefDir = ''
-
-    def MakeSampleFolder(self):
-        ## './Output/Jaewoo/Test_samples'
-        self.strOutProjectDir = './Output/{user}/{project}'.format(user=self.strUser, project=self.strProject)
-
-        ## './Output/Jaewoo/Test_samples/Sample_1'
-        self.strOutSampleDir = os.path.join(self.strOutProjectDir, self.strSample)
-        Helper.MakeFolderIfNot(self.strOutSampleDir)
-
-        ## './Output/Jaewoo/Test_samples/Sample_1/Tmp'
-        Helper.MakeFolderIfNot(os.path.join(self.strOutSampleDir, 'Tmp'))
-
-        ## './Output/Jaewoo/Test_samples/Sample_1/Tmp/Pickle'
-        Helper.MakeFolderIfNot(os.path.join(self.strOutSampleDir, 'Tmp/Pickle'))
-
-        ## './Output/Jaewoo/Test_samples/Sample_1/Result'
-        Helper.MakeFolderIfNot(os.path.join(self.strOutSampleDir, 'Result'))
-
-        ## './Output/Jaewoo/Test_samples/All_results
-        strAllResultDir = os.path.join(self.strOutProjectDir, 'All_results')
-        Helper.MakeFolderIfNot(strAllResultDir)
+    def mkdir_sample(self, sample_name: str):
+        # TODO
+        self.input_sample_organizer[sample_name] = Helper.mkdir_if_not(
+            self.input_dir / sample_name
+        )
+        self.output_sample_organizer[sample_name] = Helper.mkdir_if_not(
+            self.output_dir / sample_name
+        )
+        self.result_dir = Helper.mkdir_if_not(
+            self.output_sample_organizer[sample_name] / "Result"
+        )
 
 
-class CoreHash(object):
+class ExtractorRunner:
+    def __init__(self, sample: str, args: SimpleNamespace):
+        args.python = sys.executable
+        # Find python executable if not specified
+        args.system_structure.mkdir_sample(sample)
+        self.sample = sample
+        self.args = args
 
-    @staticmethod
-    def MakeHashTable(strSeq, intBarcodeLen):
-        listSeqWindow = [strSeq[i:i + intBarcodeLen] for i in range(len(strSeq))[:-intBarcodeLen - 1]]
-        return listSeqWindow
+        for idx, file_path in enumerate(
+            [
+                p
+                for p in self.args.system_structure.input_sample_organizer[
+                    self.sample
+                ].glob("*")
+            ]
+        ):
+            # Load input file from input sample folder (only one file)
+            if file_path.suffix in [".fastq", ".fq", ".fastq.gz", ".fq.gz"]:
+                args.logger.info(f"File name : {file_path.stem}")
+                self.args.system_structure.input_file_organizer[self.sample] = (
+                    pathlib.Path.cwd() / file_path
+                )
+                break
 
-    @staticmethod
-    def IndexHashTable(dictRef, strSeqWindow, intFirstBarcode):
-        lCol_ref = dictRef[strSeqWindow]
-        strBarcode = strSeqWindow
-        intFirstBarcode = 1
+            if (
+                idx
+                == len(
+                    [
+                        p
+                        for p in self.args.system_structure.input_sample_organizer[
+                            self.sample
+                        ].glob("*")
+                    ]
+                )
+                - 1
+            ):
+                raise Exception("No fastq file in the sample folder")
 
-        return (lCol_ref, strBarcode, intFirstBarcode)
+        # self.strInputList  => contains all splitted fastq file path; glob can be used
 
+        self.args.system_structure.seq_split_dir = Helper.mkdir_if_not(
+            self.args.system_structure.input_sample_organizer[self.sample]
+            / "Split_files"
+        )
 
-class CoreGotoh(object):
+    def _split_into_chunks(self):
 
-    def __init__(self, strEDNAFULL='', floOg='', floOe=''):
-        self.npAlnMatrix = CRISPResso2Align.read_matrix(strEDNAFULL)
-        self.floOg = floOg
-        self.floOe = floOe
+        ### Defensive : original fastq wc == split fastq wc
+        # https://docs.python.org/3.9/library/subprocess.html#security-considerations
+        sp.run(
+            shlex.split(
+                shlex.quote(
+                    f"split {self.args.system_structure.input_file_organizer[self.sample]} -l {4 * self.args.chunk_size} -d -a 6 --additional-suffix=.fastq {self.args.system_structure.seq_split_dir}/split_"
+                )
+            ),
+            shell=True,
+            check=True,
+        )
 
-    def GapIncentive(self, strRefSeqAfterBarcode):
-        ## cripsress no incentive == gotoh
-        intAmpLen = len(strRefSeqAfterBarcode)
-        npGapIncentive = np.zeros(intAmpLen + 1, dtype=np.int)
-        return npGapIncentive
+        self.args.logger.info(
+            f"The number of split files:{len(list(self.args.system_structure.seq_split_dir.glob('*')))}"
+        )
 
-    def RunCRISPResso2(self, strQuerySeqAfterBarcode, strRefSeqAfterBarcode, npGapIncentive):
-        listResult = CRISPResso2Align.global_align(strQuerySeqAfterBarcode.upper(), strRefSeqAfterBarcode.upper(),
-                                                   matrix=self.npAlnMatrix, gap_open=self.floOg, gap_extend=self.floOe,
-                                                   gap_incentive=npGapIncentive)
-        return listResult
+    def _populate_command(self):
 
-
-def CheckProcessedFiles(Func):
-    def Wrapped_func(**kwargs):
-        InstInitFolder = kwargs['InstInitFolder']
-        strInputProject = kwargs['strInputProject']
-        listSamples = kwargs['listSamples']
-        logging = kwargs['logging']
-
-        logging.info('File num check: input folder and project list')
-        Helper.CheckSameNum(strInputProject, listSamples)
-
-        # RunPipeline(**kwargs)
-        Func(**kwargs)
-
-        logging.info('Check that all folders are well created.')
-
-    return Wrapped_func
-
-
-def AttachSeqToIndel(strSample, strBarcodeName, strIndelPos,
-                     strRefseq, strQueryseq, dictSub):
-    listIndelPos = strIndelPos.split('M')
-    intMatch = int(listIndelPos[0])
-
-    if 'I' in strIndelPos:
-        intInsertion = int(listIndelPos[1].replace('I', ''))
-        strInDelSeq = strQueryseq[intMatch:intMatch + intInsertion]
-
-    elif 'D' in strIndelPos:
-        intDeletion = int(listIndelPos[1].replace('D', ''))
-        strInDelSeq = strRefseq[intMatch:intMatch + intDeletion]
-
-    else:
-        logging.info('strIndelClass is included I or D. This variable is %s' % strIndelPos)
-        raise Exception
-
-    strInDelPosSeq = strIndelPos + '_' + strInDelSeq
-
-    try:
-        _ = dictSub[strSample][strBarcodeName]
-    except KeyError:
-        dictSub[strSample][strBarcodeName] = {}
-
-    try:
-
-        dictSub[strSample][strBarcodeName][strBarcodeName + ':' + strInDelPosSeq]['IndelCount'] += 1
-    except KeyError:
-        dictSub[strSample][strBarcodeName][strBarcodeName + ':' + strInDelPosSeq] = {'IndelCount': 1}
+        return [
+            (
+                str(pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f),
+                str(
+                    pathlib.Path.cwd()
+                    / self.args.system_structure.barcode_dir
+                    / self.args.barcode
+                ),
+                self.args.logger,
+            )
+            for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
+            if f.endswith(".fastq")
+        ]
 
 
-def RunProgram(sCmd):
-    sp.run(sCmd, shell=True)
+def system_struct_checker(func):
+    def wrapper(args: SimpleNamespace):
+
+        args.multicore = os.cpu_count() if args.multicore == 0 else args.multicore
+        args.logger.info("Program start")
+        if os.cpu_count() < args.multicore:
+            args.logger.warning(
+                f"Optimal threads <= {mp.cpu_count()} : {args.multicore} is not recommended"
+            )
+        for key, value in sorted(vars(args).items()):
+            args.logger.info(f"Argument {key}: {value}")
+
+        args.logger.info("File num check: input folder and project list")
+        Helper.equal_num_samples_checker(
+            args.system_structure.input_dir, args.samples, args.logger
+        )
+
+        func(args)
+        args.logger.info("Extraction process completed.")
+
+    return wrapper
 
 
-def RunMulticore(lCmd, iCore):
-    """
+@system_struct_checker
+def run_pipeline(args: SimpleNamespace) -> None:
+    for sample in args.samples:
+        Helper.SplitSampleInfo(sample)
 
-    """
+        extractor_runner = ExtractorRunner(sample, args)
+
+        # Chunking
+        args.logger.info("Splitting sequecnes into chunks")
+        extractor_runner._split_into_chunks()
+
+        args.logger.info("Populating command...")
+        listCmd = extractor_runner._populate_command()
+
+        args.logger.info("RunMulticore")
+        run_extractor_mp(listCmd, args.multicore, args.logger).to_csv(
+            f"{args.system_structure.result_dir}/{sample}+extraction_result.csv"
+        )
+
+
+def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
+    from extractor import main as extractor_main
 
     for sCmd in lCmd:
-        print(sCmd)
+        logger.info(f"Running {sCmd} command with {iCore} cores")
 
-    # p = mp.Pool(iCore)
-    # p.map_async(RunProgram, lCmd).get()
-    # p.close()
+    result = []
+    with ProcessPoolExecutor(max_workers=iCore) as executor:
+        for rval in executor.map(extractor_main, lCmd):
+            result.append(rval)
+    logger.info(f"All extra tion subprocesses completed")
+    logger.info(f"Merging extraction results...")
 
-    rc = parmap.map(RunProgram, lCmd, pm_pbar=True)
-    # print(rc)
+    df = result.pop()
+    for d in result:
+        df["Read_counts"] = df["Read_counts"] + d["Read_counts"]
+
+    return df
