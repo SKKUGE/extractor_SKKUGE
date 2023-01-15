@@ -20,7 +20,7 @@ def extract_read_cnts(
     barcode_file: pathlib.Path,
 ) -> pd.DataFrame:
     # df index == barcode, column == read count
-
+    
     tqdm.pandas()
     # Load barcode file
     result_df = pd.read_csv(
@@ -28,6 +28,7 @@ def extract_read_cnts(
     ).set_index(
         "Gene"
     )  # TODO: tentative design
+    result_df = pd.DataFrame()
 
     # Load a splitted sequencing result using high-level I/O
     seqs = skbio.io.read(
