@@ -243,7 +243,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         Helper.SplitSampleInfo(sample)
 
         extractor_runner = ExtractorRunner(sample, args)
-
+        
         # Chunking
         args.logger.info("Splitting sequecnes into chunks")
         extractor_runner._split_into_chunks()
@@ -259,7 +259,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
 def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
     from extractor import main as extractor_main
-
+    
     for sCmd in lCmd:
         logger.info(f"Running {sCmd} command with {iCore} cores")
 
@@ -288,13 +288,6 @@ class ReadBarcode(object):
 
         self.BarcodeList = pd.DataFrame()
 
-    def SelectFromExcel(self):
-
-        df = pd.read_excel(
-            pathlib.Path("User" + "/" + self.user + "/" + f"Barcode Database.xlsx"), engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
-        #out = df.loc[:, ['Gene name', 'Barcode sequence']]
-        self.BarcodeList = df
-        return df
 
     def UseCSV(self):
         f_csv = pd.read_csv(pathlib.Path("Input" + "/" + f"input.csv")) #edit to pathlib later
@@ -319,7 +312,8 @@ class ReadBarcode(object):
         return Barcode_temp
 
     def UseExcel(self):
-        db = self.BarcodeList.copy()
+        db = pd.read_excel(
+            pathlib.Path("User" + "/" + self.user + "/" + f"Barcode Database.xlsx"), engine = 'openpyxl', sheet_name="Oligo seq")
         num=0
         for index in db.columns :
             print(num,index)
@@ -341,4 +335,6 @@ class ReadBarcode(object):
             options = temp[temp.index.isin(condition)].values
             db = db[db[option].isin(options)]
         print(db)
+        self.BarcodeList = db[['Gene name', 'Barcode sequence']]
+        db.to_csv(pathlib.Path("Barcodes/Barcode.csv"))
         return db
