@@ -5,7 +5,7 @@ from tqdm import tqdm
 import multiprocessing as mp  # Multiprocessing
 import gc
 
-N_JOBS = 2
+N_JOBS = 1
 FRAG_LENGTH = [278, 268, 194]
 GENEROSITY = 1
 FILES = """

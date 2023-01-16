@@ -257,15 +257,19 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
 
 def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
+    import time
     from extractor import main as extractor_main
 
     for sCmd in lCmd:
         logger.info(f"Running {sCmd} command with {iCore} cores")
 
     result = []
+    start = time.time()
     with ProcessPoolExecutor(max_workers=iCore) as executor:
         for rval in executor.map(extractor_main, lCmd):
             result.append(rval)
+    end = time.time()
+    logger.info(f"Extraction is done. {end - start}s elapsed.")
     logger.info(f"All extra tion subprocesses completed")
     logger.info(f"Merging extraction results...")
 

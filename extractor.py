@@ -21,6 +21,9 @@ def extract_read_cnts(
 ) -> pd.DataFrame:
     # df index == barcode, column == read count
 
+    from torch import cuda
+    import cudf
+
     tqdm.pandas()
     # Load barcode file
     result_df = pd.read_csv(
@@ -29,18 +32,38 @@ def extract_read_cnts(
         "Gene"
     )  # TODO: tentative design
 
-    # Load a splitted sequencing result using high-level I/O
+    # Load a splitted sequencing result using high-level I/O; validating fastq format
     seqs = skbio.io.read(
         sequence_file, format="fastq", verify=True, variant="illumina1.8"
     )  # FASTQ format verification using skbio
 
-    seq_df = pd.DataFrame([seq._string.decode() for seq in seqs], columns=["Sequence"])
     result_df["Read_counts"] = 0
-    print()
-    for idx, row in tqdm(result_df.iterrows()):
-        result_df.loc[idx, "Read_counts"] = (
-            seq_df["Sequence"].str.contains(row["Barcode"]).sum()
+
+    cuda_available = cuda.is_available()
+
+    # debug
+    # cuda_available = False
+    if cuda_available:
+        print("Nvidia GPU detected!")
+
+        seq_df = cudf.DataFrame(
+            [seq._string.decode() for seq in seqs], columns=["Sequence"]
         )
+        for idx, row in tqdm(result_df.iterrows()):
+            result_df.loc[idx, "Read_counts"] = (
+                seq_df["Sequence"].str.contains(row["Barcode"]).sum()
+            )
+
+    else:  # this command not being found can raise quite a few different errors depending on the configuration
+        # print("No Nvidia GPU in system!")
+
+        seq_df = pd.DataFrame(
+            [seq._string.decode() for seq in seqs], columns=["Sequence"]
+        )
+        for idx, row in tqdm(result_df.iterrows()):
+            result_df.loc[idx, "Read_counts"] = (
+                seq_df["Sequence"].str.contains(row["Barcode"]).sum()
+            )
 
     # result_df example
     #                                             Barcode  Read_counts
@@ -57,10 +80,10 @@ def extract_read_cnts(
 def main(*args) -> pd.DataFrame:
     (sequence, barcode, logger) = args[0]
 
-    start = time.time()
+    # start = time.time()
     rval = extract_read_cnts(sequence, barcode)
-    end = time.time()
+    # end = time.time()
 
-    logger.info(f"Extraction is done. {end - start}s elapsed.")
+    # logger.info(f"Extraction is done. {end - start}s elapsed.")
 
     return rval
