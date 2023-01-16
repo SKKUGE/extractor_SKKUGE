@@ -9,7 +9,11 @@ N_JOBS = 2
 FRAG_LENGTH = [278, 268, 194]
 GENEROSITY = 1
 FILES = """
-20220930_1.extendedFrags.fastq
+20230109_1.extendedFrags.fastq
+20230109_2.extendedFrags.fastq
+20230109_3.extendedFrags.fastq
+20230109_4.extendedFrags.fastq
+20230109_5.extendedFrags.fastq
 """
 
 # TODO: seaparating removes the quality metrics of the reads
