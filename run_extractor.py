@@ -59,12 +59,9 @@ def main():
 
     args = parser.parse_args()
 
-    read_b = ReadBarcode()
-    excel = read_b.SelectFromExcel()
-    barcode_data = read_b.UseExcel()
     args.user_name = input('Enter User name : ')
     args.project_name = input('Enter Project name : ')
-    print(args.user_name, args.project_name, barcode_data)
+    print(args.user_name, args.project_name)
     system_structure = SystemStructure(args.user_name, args.project_name)
 
     # Prepare logger

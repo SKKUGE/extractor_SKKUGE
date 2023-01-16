@@ -9,7 +9,7 @@ import pandas as pd
 from collections import defaultdict
 from types import SimpleNamespace
 from concurrent.futures import ProcessPoolExecutor
-
+import re
 import pandas as pd
 
 
@@ -243,7 +243,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         Helper.SplitSampleInfo(sample)
 
         extractor_runner = ExtractorRunner(sample, args)
-
+        
         # Chunking
         args.logger.info("Splitting sequecnes into chunks")
         extractor_runner._split_into_chunks()
@@ -259,7 +259,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
 def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
     from extractor import main as extractor_main
-
+    
     for sCmd in lCmd:
         logger.info(f"Running {sCmd} command with {iCore} cores")
 
@@ -287,6 +287,14 @@ class ReadBarcode(object):
         self.index = ''
         self.BarcodeList = pd.DataFrame()
 
+    def SelectFromExcel(self):
+
+        df = pd.read_excel(
+            pathlib.Path("User" + "/" + self.user + "/" + f"Barcode Database.xlsx"), engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
+        #out = df.loc[:, ['Gene name', 'Barcode sequence']]
+        self.BarcodeList = df
+        return df
+
     def UseCSV(self):
         f_csv = pd.read_csv(pathlib.Path("Input" + "/" + f"input.csv")) #edit to pathlib later
         self.user = f_csv.at[0,'user_name']
@@ -312,7 +320,7 @@ class ReadBarcode(object):
     def UseExcel(self):
         db = pd.read_excel(
             pathlib.Path("User" + "/" + self.user + "/" + f"Barcode Database.xlsx"), engine = 'openpyxl', sheet_name="Oligo seq")
-        
+    
         num=0
         
         for index in db.columns :
@@ -331,12 +339,24 @@ class ReadBarcode(object):
             condition = input(f'select rows to use <<{option}>>')
             if(condition == '*'):
                 continue
-            condition = list(map(int, condition.split()))
-            print(condition)
+            select_temp = condition.split()
+            ran = re.compile('[\d~\d]')
+            selection_list = []
+            for c in select_temp:
+                if c == ran:
+                    c.split('~')
+                    n1 = int(c[0])
+                    n2 = int(c[1])
+                    n_list = list(range(n1, n2+1))
+                    selection_list.append(n_list)
+                selection_list.append(int(c))
+            print(selection_list)
             #delete = temp.drop(index = condition).index
             options = temp[temp.index.isin(condition)].values
             db = db[db[option].isin(options)]
         
 
         print(db)
+        self.BarcodeList = db[['Gene name', 'Barcode sequence']]
+        db.to_csv(pathlib.Path("Barcodes/Barcode.csv"))
         return db
