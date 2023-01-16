@@ -62,6 +62,8 @@ def main():
     args.user_name = input('Enter User name : ')
     args.project_name = input('Enter Project name : ')
     print(args.user_name, args.project_name)
+    rb = ReadBarcode()
+    barcode = rb.UseExcel()
     system_structure = SystemStructure(args.user_name, args.project_name)
 
     # Prepare logger

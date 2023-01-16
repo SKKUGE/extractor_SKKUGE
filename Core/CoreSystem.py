@@ -340,23 +340,25 @@ class ReadBarcode(object):
             if(condition == '*'):
                 continue
             select_temp = condition.split()
-            ran = re.compile('[\d~\d]')
+            ran = re.compile('/d*~/d*')
             selection_list = []
             for c in select_temp:
+                print(c==ran)
                 if c == ran:
                     c.split('~')
                     n1 = int(c[0])
                     n2 = int(c[1])
                     n_list = list(range(n1, n2+1))
                     selection_list.append(n_list)
-                selection_list.append(int(c))
+                    
+                else : selection_list.append(int(c))
             print(selection_list)
             #delete = temp.drop(index = condition).index
-            options = temp[temp.index.isin(condition)].values
+            options = temp[temp.index.isin(selection_list)].values
             db = db[db[option].isin(options)]
         
 
         print(db)
         self.BarcodeList = db[['Gene name', 'Barcode sequence']]
-        db.to_csv(pathlib.Path("Barcodes/Barcode.csv"))
+        db.to_csv(pathlib.Path("Barcodes/Barcode.txt"))
         return db
