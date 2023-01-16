@@ -108,7 +108,7 @@ class SystemStructure(object):
         self.user_dir = Helper.mkdir_if_not("User" + "/" + self.user_name)
         self.barcode_dir = Helper.mkdir_if_not("Barcodes")
         self.input_dir = Helper.mkdir_if_not(
-            "Input" + "/" + self.user_name + "/" + self.project_name
+            "User" + "/" + self.user_name + "/" + self.project_name + "/Input"
         )
         self.project_samples_path = pathlib.Path(
             "User" + "/" + self.user_name + "/" + f"{self.project_name}.txt"
@@ -118,7 +118,7 @@ class SystemStructure(object):
                 f.write("")
 
         self.output_dir = Helper.mkdir_if_not(
-            "Output" + "/" + self.user_name + "/" + self.project_name
+            "User" + "/" + self.user_name + "/" + self.project_name + "/Output"
         )
 
     def mkdir_sample(self, sample_name: str):
@@ -221,7 +221,7 @@ def system_struct_checker(func):
         args.logger.info("Program start")
         if os.cpu_count() < args.multicore:
             args.logger.warning(
-                f"Optimal threads <= {sp.cpu_count()} : {args.multicore} is not recommended"
+                f"Optimal threads <= {os.cpu_count()} : {args.multicore} is not recommended"
             )
         for key, value in sorted(vars(args).items()):
             args.logger.info(f"Argument {key}: {value}")
@@ -285,16 +285,7 @@ class ReadBarcode(object):
         self.user = ''
         self.project = ''
         self.index = ''
-
         self.BarcodeList = pd.DataFrame()
-
-    def SelectFromExcel(self):
-
-        df = pd.read_excel(
-            pathlib.Path("User" + "/" + self.user + "/" + f"Barcode Database.xlsx"), engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
-        #out = df.loc[:, ['Gene name', 'Barcode sequence']]
-        self.BarcodeList = df
-        return df
 
     def UseCSV(self):
         f_csv = pd.read_csv(pathlib.Path("Input" + "/" + f"input.csv")) #edit to pathlib later
@@ -319,20 +310,25 @@ class ReadBarcode(object):
         return Barcode_temp
 
     def UseExcel(self):
-        db = self.BarcodeList.copy()
+        db = pd.read_excel(
+            pathlib.Path("User" + "/" + self.user + "/" + f"Barcode Database.xlsx"), engine = 'openpyxl', sheet_name="Oligo seq")
+        
         num=0
+        
         for index in db.columns :
             print(num,index)
             num=num+1
+        chk = input()
+        print(chk)
         col_num = list(map(int,input('select columns to use (ex:0 1 3 7)').split()))
+        print(col_num)
         db = db.iloc[:, col_num]
         print(db)
         for option in db.columns:
             temp = db[option]
             temp = temp.drop_duplicates().reset_index(drop = True)
             print(temp)
-            
-            condition = input('select rows to use (ex:0 1 3 7)')
+            condition = input(f'select rows to use <<{option}>>')
             if(condition == '*'):
                 continue
             condition = list(map(int, condition.split()))
@@ -340,5 +336,7 @@ class ReadBarcode(object):
             #delete = temp.drop(index = condition).index
             options = temp[temp.index.isin(condition)].values
             db = db[db[option].isin(options)]
+        
+
         print(db)
         return db
