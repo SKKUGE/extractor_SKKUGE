@@ -42,7 +42,7 @@ def extract_read_cnts(
     cuda_available = cuda.is_available()
 
     # debug
-    # cuda_available = False
+    cuda_available = False
     if cuda_available:
         print("Nvidia GPU detected!")
 
@@ -55,7 +55,7 @@ def extract_read_cnts(
             )
 
     else:  # this command not being found can raise quite a few different errors depending on the configuration
-        # print("No Nvidia GPU in system!")
+        print("No Nvidia GPU in system!")
 
         seq_df = pd.DataFrame(
             [seq._string.decode() for seq in seqs], columns=["Sequence"]

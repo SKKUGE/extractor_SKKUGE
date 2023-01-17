@@ -270,7 +270,7 @@ def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
             result.append(rval)
     end = time.time()
     logger.info(f"Extraction is done. {end - start}s elapsed.")
-    logger.info(f"All extra tion subprocesses completed")
+    logger.info(f"All extraction subprocesses completed")
     logger.info(f"Merging extraction results...")
 
     df = result.pop()
