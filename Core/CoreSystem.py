@@ -287,51 +287,22 @@ class ReadBarcode(object):
         self.index = ''
         self.BarcodeList = pd.DataFrame()
 
-    def SelectFromExcel(self):
-
-        df = pd.read_excel(
-            pathlib.Path("User" + "/" + self.user + "/" + f"Barcode Database.xlsx"), engine = 'openpyxl', sheet_name="Oligo seq") #edit to pathlib later
-        #out = df.loc[:, ['Gene name', 'Barcode sequence']]
-        self.BarcodeList = df
-        return df
-
-    def UseCSV(self):
-        f_csv = pd.read_csv(pathlib.Path("Input" + "/" + f"input.csv")) #edit to pathlib later
-        self.user = f_csv.at[0,'user_name']
-        self.project = f_csv.at[0,'project_name']
-        Barcode_temp = pd.DataFrame([], columns=['user_name','project_name','Gene name','Barcode sequence'])
-
-        for gene_name in f_csv['Gene name']:
-            temp = self.BarcodeList[self.BarcodeList['Gene name'] == gene_name].copy()
-            temp = temp.loc[:, ['Gene name', 'Barcode sequence']]
-            Barcode_temp = pd.concat([Barcode_temp,temp])
-
-        #for gene_set in f_csv['gene set'] :
-        #    temp = self.BarcodeList[self.BarcodeList['Gene name'].str.contains(gene_set)].copy()
-        #    Barcode_temp = pd.concat([Barcode_temp,temp])
-
-        Barcode_temp['user_name'] = self.user
-        Barcode_temp['project_name'] = self.project
-        #Barcode_temp['Barcode sequence'] = 'T'*int(self.poly_t) + Barcode_temp['Barcode sequence'].astype(str)
-
-        #print(Barcode_temp)
-        return Barcode_temp
-
     def UseExcel(self):
         db = pd.read_excel(
             pathlib.Path("User" + "/" + self.user + "/" + f"Barcode Database.xlsx"), engine = 'openpyxl', sheet_name="Oligo seq")
-    
+        os.rename(pathlib.Path("User/" + self.user + "/Barcode Database.xlsx"), pathlib.Path("User/" + self.user + "/" + self.project + "/" f"{self.user}_{self.project}_barcode.xlsx"))
         num=0
         
         for index in db.columns :
             print(num,index)
             num=num+1
-        chk = input()
-        print(chk)
-        col_num = list(map(int,input('select columns to use (ex:0 1 3 7)').split()))
+
+        col_num = list(map(int,input('select columns to use (ex:0 1 3 7), Last is Barcode sequence').split()))
         print(col_num)
         db = db.iloc[:, col_num]
-        print(db)
+        col_b = db.columns[-1]
+        db.rename(columns = {col_b:'Barcode'}, inplace = True)
+        print(col_b, db)
         for option in db.columns:
             temp = db[option]
             temp = temp.drop_duplicates().reset_index(drop = True)
@@ -340,25 +311,27 @@ class ReadBarcode(object):
             if(condition == '*'):
                 continue
             select_temp = condition.split()
-            ran = re.compile('/d*~/d*')
             selection_list = []
             for c in select_temp:
-                print(c==ran)
-                if c == ran:
-                    c.split('~')
+                print(c)
+                if '~' in c:
+                    c = c.split('~')
                     n1 = int(c[0])
                     n2 = int(c[1])
                     n_list = list(range(n1, n2+1))
-                    selection_list.append(n_list)
+                    selection_list.extend(n_list)
                     
                 else : selection_list.append(int(c))
             print(selection_list)
             #delete = temp.drop(index = condition).index
             options = temp[temp.index.isin(selection_list)].values
             db = db[db[option].isin(options)]
-        
+            if(db.columns[0] == option):
+                db['Gene'] = db[option]
+            else :
+                db['Gene'] = db['Gene'] + "_" + db[option]
 
         print(db)
-        self.BarcodeList = db[['Gene name', 'Barcode sequence']]
-        db.to_csv(pathlib.Path("Barcodes/Barcode.txt"))
-        return db
+        self.BarcodeList = db[['Gene', 'Barcode']]
+        self.BarcodeList.to_csv(pathlib.Path("Barcodes/Barcode.txt"), sep = ':', header = None, index = False)
+        return self.BarcodeList
