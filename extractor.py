@@ -28,8 +28,6 @@ def extract_read_cnts(
     ).set_index(
         "Gene"
     )  # TODO: tentative design
-    result_df = pd.DataFrame()
-
     # Load a splitted sequencing result using high-level I/O
     seqs = skbio.io.read(
         sequence_file, format="fastq", verify=True, variant="illumina1.8"

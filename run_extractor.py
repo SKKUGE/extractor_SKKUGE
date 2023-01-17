@@ -43,7 +43,7 @@ def main():
     parser.add_argument(
         "--barcode",
         type=pathlib.Path,
-        default="Barcodes/Barcode.txt",
+        default="Barcode.txt",
         help="Barcode file path",
     )
     parser.add_argument(
@@ -62,7 +62,7 @@ def main():
     args.user_name = input('Enter User name : ')
     args.project_name = input('Enter Project name : ')
     print(args.user_name, args.project_name)
-    rb = ReadBarcode()
+    rb = ReadBarcode(args.user_name, args.project_name, args.barcode)
     barcode = rb.UseExcel()
     system_structure = SystemStructure(args.user_name, args.project_name)
 

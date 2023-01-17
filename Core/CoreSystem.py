@@ -280,10 +280,11 @@ def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
 #LBJ editing
 class ReadBarcode(object):
 
-    def __init__(self):
+    def __init__(self, user, project, barcode):
         self.FilePath = ''
-        self.user = ''
-        self.project = ''
+        self.user = user
+        self.project = project
+        self.barcode = barcode
         self.index = ''
         self.BarcodeList = pd.DataFrame()
 
@@ -297,7 +298,7 @@ class ReadBarcode(object):
             print(num,index)
             num=num+1
 
-        col_num = list(map(int,input('select columns to use (ex:0 1 3 7), Last is Barcode sequence').split()))
+        col_num = list(map(int,input('select columns to use, Last is Barcode sequence : ').split()))
         print(col_num)
         db = db.iloc[:, col_num]
         col_b = db.columns[-1]
@@ -307,7 +308,7 @@ class ReadBarcode(object):
             temp = db[option]
             temp = temp.drop_duplicates().reset_index(drop = True)
             print(temp)
-            condition = input(f'select rows to use <<{option}>>')
+            condition = input(f'select rows to use in <<{option}>> : ')
             if(condition == '*'):
                 continue
             select_temp = condition.split()
@@ -333,5 +334,5 @@ class ReadBarcode(object):
 
         print(db)
         self.BarcodeList = db[['Gene', 'Barcode']]
-        self.BarcodeList.to_csv(pathlib.Path("Barcodes/Barcode.txt"), sep = ':', header = None, index = False)
+        self.BarcodeList.to_csv(pathlib.Path("Barcodes") / self.barcode, sep = ':', header = None, index = False)
         return self.BarcodeList
