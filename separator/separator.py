@@ -63,7 +63,7 @@ def sep(file):
                     save_targets[idx],
                     frag.to_pandas().values.reshape(-1, 1),
                     fmt="%s",
-                    newline="",
+                    newline="\n",
                 )
 
                 print(f"{pathlib.Path(file).absolute()}_F{idx + 1}.fastq saved")
@@ -86,7 +86,7 @@ def sep(file):
                     save_targets[idx],
                     frag.values.reshape(-1, 1),
                     fmt="%s",
-                    newline="",
+                    newline="\n",
                 )
 
                 print(f"{pathlib.Path(file).absolute()}_F{idx + 1}.fastq saved")
