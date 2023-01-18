@@ -17,7 +17,7 @@ from Core.CoreSystem import (
     run_pipeline,
 )
 
-
+import toolkit.FLASH_multiple_files as flash
 def main():
     parser = argparse.ArgumentParser(
         prog="extractor_SKKUGE",
@@ -72,11 +72,18 @@ def main():
         args.user_name = input('Enter User name : ')
         args.project_name = input('Enter Project name : ')
         args.barcode = input('Enter barcode file name : ')
+    
+    system_structure = SystemStructure(args.user_name, args.project_name)
+    
+    if args.ui_type :
         print(args.user_name, args.project_name)
         rb = ReadBarcode(args.user_name, args.project_name, args.barcode)
         barcode = rb.UseExcel()
     
-    system_structure = SystemStructure(args.user_name, args.project_name)
+    flash.USER = args.user_name
+    flash.PROJECT = args.project_name
+    flash.INPUT_FILES_PATH = system_structure.user_dir
+    input_merge = flash.merge()
 
     # Prepare logger
     logger = logging.getLogger(__name__)
