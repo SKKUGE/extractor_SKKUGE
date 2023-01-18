@@ -8,6 +8,7 @@ import multiprocessing as mp  # Multiprocessing
 import gc
 import pathlib
 from collections import defaultdict
+import time
 
 N_JOBS = 8
 CHUNKSIZE = 1e7
@@ -116,7 +117,10 @@ def multi_process(files, n_jobs=N_JOBS):
 if __name__ == "__main__":
 
     files = FILES.split("\n")[1:-1]
+    start = time.time()
     multi_process(files)
+    end = time.time()
 
+    print(f"Time taken: {end - start}")
     # for f in files:
     #     sep(f)
