@@ -56,14 +56,26 @@ def main():
         type=str,
         help="The project name with no space",
     )
+    parser.add_argument(
+        "-i",
+        "--ui",
+        dest="ui_type",
+        type=int,
+        default=1,
+        help="UI type, 0 : for argument mode, 1 : interactive mode(default)",
+    )
 
     args = parser.parse_args()
 
-    args.user_name = input('Enter User name : ')
-    args.project_name = input('Enter Project name : ')
-    print(args.user_name, args.project_name)
-    rb = ReadBarcode(args.user_name, args.project_name, args.barcode)
-    barcode = rb.UseExcel()
+    # code for interactive UI design
+    if args.ui_type : 
+        args.user_name = input('Enter User name : ')
+        args.project_name = input('Enter Project name : ')
+        args.barcode = input('Enter barcode file name : ')
+        print(args.user_name, args.project_name)
+        rb = ReadBarcode(args.user_name, args.project_name, args.barcode)
+        barcode = rb.UseExcel()
+    
     system_structure = SystemStructure(args.user_name, args.project_name)
 
     # Prepare logger
