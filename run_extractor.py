@@ -79,7 +79,6 @@ def main():
         print(args.user_name, args.project_name)
         rb = ReadBarcode(args.user_name, args.project_name, args.barcode)
         barcode = rb.UseExcel()
-    
     flash.USER = args.user_name
     flash.PROJECT = args.project_name
     flash.INPUT_FILES_PATH = system_structure.user_dir
