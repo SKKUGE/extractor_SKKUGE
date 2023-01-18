@@ -1,58 +1,88 @@
 import pandas as pd
+
 import numpy as np
 from tqdm import tqdm
 
 import multiprocessing as mp  # Multiprocessing
 import gc
+import pathlib
 
 N_JOBS = 1
 FRAG_LENGTH = [278, 268, 194]
 GENEROSITY = 1
 FILES = """
-20230109_1.extendedFrags.fastq
-20230109_2.extendedFrags.fastq
-20230109_3.extendedFrags.fastq
-20230109_4.extendedFrags.fastq
-20230109_5.extendedFrags.fastq
+./separator/test
 """
+# ./separator/20230109_1.extendedFrags.fastq
+# ./separator/20230109_2.extendedFrags.fastq
+# ./separator/20230109_3.extendedFrags.fastq
+# ./separator/20230109_4.extendedFrags.fastq
+# ./separator/20230109_5.extendedFrags.fastq
 
 # TODO: seaparating removes the quality metrics of the reads
 FASTQ_FORMAT = ["id", "sequence", "spacer", "quality"]
 
 
 def sep(file):
-    with open(file, "r") as f:
-        data = f.readlines()
+    from torch import cuda
 
-        iterables = [
-            [
-                i
-                for i in range(int(len(data) / len(FASTQ_FORMAT)))
-            ],
-            FASTQ_FORMAT,
-        ]
+    df = pd.DataFrame(pd.read_csv(file, header=None).values.reshape(-1, 4), columns=FASTQ_FORMAT)
+    cuda_available = cuda.is_available()
+    # cuda_available = False    # debug
+    if cuda_available:
+        # TODO: cudf_dask
+        import cudf
+        import dask_cudf as dc
+        print("Nvidia GPU detected!")
+        df = cudf.from_pandas(df)
+        df = dc.from_cudf(df, npartitions=mp.cpu_count())
 
-        idx = pd.MultiIndex.from_product(iterables, names=["first", "properties"])
-        df = pd.DataFrame(
-            data, index=idx).reset_index(level=1)
-
-        df["length"] = df[lambda x: x["properties"] == "sequence"][0].str.len()
+        df["length"] = (
+            df["sequence"].compute().str.len()
+        )
 
         for idx, f_len in tqdm(enumerate(FRAG_LENGTH)):
             frag = df[
-
                 (f_len - GENEROSITY <= df["length"])
                 & (df["length"] <= f_len + GENEROSITY)
-                ].copy()
+                ].compute()
             frag.drop("length", axis=1, inplace=True)
             np.savetxt(
-                f"{file.split('.')[0]}_F{idx + 1}.{file.split('.')[1]}.fastq",
-                frag[0].values,
+                f"{pathlib.Path(file).absolute()}_F{idx + 1}.fastq",
+                frag.to_pandas().values.reshape(-1, 1),
                 fmt="%s",
-                newline=""
+                newline="",
             )
 
-            print(f"{file.split('.')[0]}_F{idx + 1}.{file.split('.')[1]}.fastq saved")
+            print(
+                f"{pathlib.Path(file).absolute()}_F{idx + 1}.fastq saved"
+            )
+    else:
+        import dask.dataframe as dd
+        print("No Nvidia GPU in system!")
+
+        df = dd.from_pandas(df, npartitions=mp.cpu_count())
+
+        df["length"] = (
+            df["sequence"].compute().str.len()
+        )
+
+        for idx, f_len in tqdm(enumerate(FRAG_LENGTH)):
+            frag = df[
+                (f_len - GENEROSITY <= df["length"])
+                & (df["length"] <= f_len + GENEROSITY)
+                ].compute()
+            frag.drop("length", axis=1, inplace=True)
+            np.savetxt(
+                f"{pathlib.Path(file).absolute()}_F{idx + 1}.fastq",
+                frag.values.reshape(-1, 1),
+                fmt="%s",
+                newline="",
+            )
+
+            print(
+                f"{pathlib.Path(file).absolute()}_F{idx + 1}.fastq saved"
+            )
 
     del df
     gc.collect()

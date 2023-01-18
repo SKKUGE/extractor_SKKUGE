@@ -55,7 +55,6 @@ def main():
         type=str,
         help="The project name with no space",
     )
-
     args = parser.parse_args()
 
     system_structure = SystemStructure(args.user_name, args.project_name)
