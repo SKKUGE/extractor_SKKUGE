@@ -22,7 +22,6 @@ def extract_read_cnts(
     # df index == barcode, column == read count
 
     from torch import cuda
-    import cudf
 
     tqdm.pandas()
     # Load barcode file
@@ -44,6 +43,7 @@ def extract_read_cnts(
     # debug
     # cuda_available = False
     if cuda_available:
+        import cudf
         print("Nvidia GPU detected!")
 
         seq_df = cudf.DataFrame(
