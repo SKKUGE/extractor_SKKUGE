@@ -121,13 +121,13 @@ class SystemStructure(object):
             "User" + "/" + self.user_name + "/" + self.project_name + "/Output"
         )
 
-    def mkdir_sample(self, sample_name: str):
+    def mkdir_sample(self, date, sample_name: str):
         # TODO
         self.input_sample_organizer[sample_name] = Helper.mkdir_if_not(
-            self.input_dir / sample_name
+            self.input_dir / date / sample_name
         )
         self.output_sample_organizer[sample_name] = Helper.mkdir_if_not(
-            self.output_dir / sample_name
+            self.output_dir / date / sample_name
         )
         self.result_dir = Helper.mkdir_if_not(
             self.output_sample_organizer[sample_name] / "Result"
@@ -138,7 +138,7 @@ class ExtractorRunner:
     def __init__(self, sample: str, args: SimpleNamespace):
         args.python = sys.executable
         # Find python executable if not specified
-        args.system_structure.mkdir_sample(sample)
+        args.system_structure.mkdir_sample(args.date, sample)
         self.sample = sample
         self.args = args
 

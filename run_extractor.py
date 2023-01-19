@@ -82,7 +82,7 @@ def main():
     flash.USER = args.user_name
     flash.PROJECT = args.project_name
     flash.INPUT_FILES_PATH = system_structure.user_dir
-    input_merge = flash.merge()
+    d_list = flash.merge()
 
     # Prepare logger
     logger = logging.getLogger(__name__)
@@ -91,14 +91,16 @@ def main():
     logger.addHandler(stream_handler)
     # TODO: follow the system directory structure
 
-    samples = Helper.load_samples(system_structure.project_samples_path)
+    for date in d_list:
+        samples = Helper.load_samples(system_structure.input_dir / str(date) / f'{args.project_name}.txt')
+        
+        # Add custom arguments
+        args.system_structure = system_structure
+        args.samples = samples
+        args.date = str(date)
+        args.logger = logger
 
-    # Add custom arguments
-    args.system_structure = system_structure
-    args.samples = samples
-    args.logger = logger
-
-    run_pipeline(SimpleNamespace(**vars(args)))
+        run_pipeline(SimpleNamespace(**vars(args)))
     logger.info("Program end")
 
 
