@@ -34,9 +34,9 @@ def merge():
         if not os.path.isdir(folder_path / date):
             continue
         d_list.append(date)
-        INPUT_FILES = [file for file in os.listdir(INPUT_FILES_PATH / PROJECT / "Input" / date) if file.endswith(r'.fastq.gz')]
+        INPUT_FILES = [file for file in os.listdir(folder_path / date) if file.endswith(r'.fastq.gz')]
         print(INPUT_FILES_PATH)
-        folders = open(INPUT_FILES_PATH / PROJECT / 'input' / date / f'{PROJECT}.txt', 'w')
+        folders = open(folder_path / date / f'{PROJECT}.txt', 'w')
         waiting_queue = []
         for fwd, rev in grouped(INPUT_FILES, 2):
             waiting_queue.append((fwd, rev))
@@ -49,11 +49,11 @@ def merge():
             print(filename, file = folders)
             subprocess.run(
                 shlex.split(
-                    f"mkdir -p {INPUT_FILES_PATH / PROJECT / 'Input' / date / filename}"
+                    f"mkdir -p {folder_path / date / filename}"
                 )
             )
             cmd_input = shlex.split(
-                f"./flash {INPUT_FILES_PATH / PROJECT / 'Input' / date / fwd} {INPUT_FILES_PATH / PROJECT / 'Input' / date / rev} -M 400 -m 1 -O -o {INPUT_FILES_PATH / PROJECT / 'Input' / date / filename / filename} -t 32"
+                f"./flash {folder_path / date / fwd} {folder_path / date / rev} -M 400 -m 1 -O -o {folder_path / date / filename / filename} -t 32"
             )
 
             subprocess.run(cmd_input)
