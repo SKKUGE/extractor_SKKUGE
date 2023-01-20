@@ -78,7 +78,7 @@ def main():
         rb.UseExcel()
                                 
     else : 
-    system_structure = SystemStructure(args.user_name, args.project_name)
+        system_structure = SystemStructure(args.user_name, args.project_name)
     
     flash.USER = args.user_name
     flash.PROJECT = args.project_name
