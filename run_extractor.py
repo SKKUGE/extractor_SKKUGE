@@ -72,13 +72,13 @@ def main():
         args.user_name = input('Enter User name : ')
         args.project_name = input('Enter Project name : ')
         args.barcode = input('Enter barcode file name : ')
+        print(args.user_name, args.project_name)
+        rb = ReadBarcode(args.user_name, args.project_name, args.barcode) # Q: 클래스 형태로 사용하는 이유?
+        barcode = rb.UseExcel() # Q: return값이 필요? 
+                                
     
     system_structure = SystemStructure(args.user_name, args.project_name)
     
-    if args.ui_type :
-        print(args.user_name, args.project_name)
-        rb = ReadBarcode(args.user_name, args.project_name, args.barcode)
-        barcode = rb.UseExcel()
     flash.USER = args.user_name
     flash.PROJECT = args.project_name
     flash.INPUT_FILES_PATH = system_structure.user_dir

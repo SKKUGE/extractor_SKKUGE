@@ -5,11 +5,10 @@ import shlex
 import os
 import pathlib
 import sys
-import pandas as pd
+
 from collections import defaultdict
 from types import SimpleNamespace
 from concurrent.futures import ProcessPoolExecutor
-import re
 import pandas as pd
 
 
@@ -101,7 +100,7 @@ class SystemStructure(object):
         self.input_sample_organizer = defaultdict(pathlib.Path)
         self.input_file_organizer = defaultdict(
             pathlib.Path
-        )  # .fastq.gz #TODO: FLASh integration? https://ccb.jhu.edu/software/FLASH/
+        )  # .fastq.gz
         # should contain absolute path to the file
         self.output_sample_organizer = defaultdict(pathlib.Path)
 
@@ -136,11 +135,10 @@ class SystemStructure(object):
 
 class ExtractorRunner:
     def __init__(self, sample: str, args: SimpleNamespace):
-        args.python = sys.executable
-        # Find python executable if not specified
-        args.system_structure.mkdir_sample(args.date, sample)
         self.sample = sample
         self.args = args
+        self.args.python = sys.executable
+        self.args.system_structure.mkdir_sample(self.args.date, sample)
 
         for idx, file_path in enumerate(
             [
@@ -281,7 +279,6 @@ def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
     return df
 
 
-#LBJ editing
 class ReadBarcode(object):
 
     def __init__(self, user, project, barcode):
