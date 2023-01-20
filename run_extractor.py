@@ -73,10 +73,11 @@ def main():
         args.project_name = input('Enter Project name : ')
         args.barcode = input('Enter barcode file name : ')
         print(args.user_name, args.project_name)
+        system_structure = SystemStructure(args.user_name, args.project_name)
         rb = ReadBarcode(args.user_name, args.project_name, args.barcode) # Q: 클래스 형태로 사용하는 이유?
-        barcode = rb.UseExcel() # Q: return값이 필요? 
+        rb.UseExcel() # Q: return값이 필요? 
                                 
-    
+    else : 
     system_structure = SystemStructure(args.user_name, args.project_name)
     
     flash.USER = args.user_name
