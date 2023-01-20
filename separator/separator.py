@@ -1,15 +1,25 @@
 import pandas as pd
+
 import numpy as np
 from tqdm import tqdm
 
+from concurrent.futures import ProcessPoolExecutor
 import multiprocessing as mp  # Multiprocessing
 import gc
+import pathlib
+from collections import defaultdict
+import time
 
-N_JOBS = 2
+N_JOBS = 8
+CHUNKSIZE = 1e7
 FRAG_LENGTH = [278, 268, 194]
 GENEROSITY = 1
 FILES = """
-20220930_1.extendedFrags.fastq
+./separator/20230109_1.extendedFrags.fastq
+./separator/20230109_2.extendedFrags.fastq
+./separator/20230109_3.extendedFrags.fastq
+./separator/20230109_4.extendedFrags.fastq
+./separator/20230109_5.extendedFrags.fastq
 """
 
 # TODO: seaparating removes the quality metrics of the reads
@@ -17,48 +27,79 @@ FASTQ_FORMAT = ["id", "sequence", "spacer", "quality"]
 
 
 def sep(file):
-    with open(file, "r") as f:
-        data = f.readlines()
+    from torch import cuda
 
-        iterables = [
-            [
-                i
-                for i in range(int(len(data) / len(FASTQ_FORMAT)))
-            ],
-            FASTQ_FORMAT,
-        ]
+    # Open files for chunk processing
+    save_targets = defaultdict(object)
 
-        idx = pd.MultiIndex.from_product(iterables, names=["first", "properties"])
-        df = pd.DataFrame(
-            data, index=idx).reset_index(level=1)
+    for idx, frag in enumerate(FRAG_LENGTH):
+        save_targets[idx] = open(
+            f"{pathlib.Path(file).absolute()}_F{idx + 1}.fastq", "a"
+        )
 
-        df["length"] = df[lambda x: x["properties"] == "sequence"][0].str.len()
+    for chunk in tqdm(pd.read_csv(file, header=None, engine="c", chunksize=CHUNKSIZE)):
 
-        for idx, f_len in tqdm(enumerate(FRAG_LENGTH)):
-            frag = df[
+        df = pd.DataFrame(chunk.values.reshape(-1, 4), columns=FASTQ_FORMAT)
+        cuda_available = cuda.is_available()
+        # cuda_available = False    # debug
+        if cuda_available:
+            # TODO: cudf_dask
+            import cudf
+            import dask_cudf as dc
 
-                (f_len - GENEROSITY <= df["length"])
-                & (df["length"] <= f_len + GENEROSITY)
-                ].copy()
-            frag.drop("length", axis=1, inplace=True)
-            np.savetxt(
-                f"{file.split('.')[0]}_F{idx + 1}.{file.split('.')[1]}.fastq",
-                frag[0].values,
-                fmt="%s",
-                newline=""
-            )
+            print("Nvidia GPU detected!")
+            df = cudf.from_pandas(df)
+            df = dc.from_cudf(df, npartitions=mp.cpu_count())
 
-            print(f"{file.split('.')[0]}_F{idx + 1}.{file.split('.')[1]}.fastq saved")
+            df["length"] = df["sequence"].compute().str.len()
 
-    del df
-    gc.collect()
+            for idx, f_len in enumerate(FRAG_LENGTH):
+                frag = df[
+                    (f_len - GENEROSITY <= df["length"])
+                    & (df["length"] <= f_len + GENEROSITY)
+                ].compute()
+                frag.drop("length", axis=1, inplace=True)
+                np.savetxt(
+                    save_targets[idx],
+                    frag.to_pandas().values.reshape(-1, 1),
+                    fmt="%s",
+                    newline="\n",
+                )
+
+                print(f"{pathlib.Path(file).absolute()}_F{idx + 1}.fastq saved")
+        else:
+            import dask.dataframe as dd
+
+            print("No Nvidia GPU in system!")
+
+            df = dd.from_pandas(df, npartitions=mp.cpu_count())
+
+            df["length"] = df["sequence"].compute().str.len()
+
+            for idx, f_len in enumerate(FRAG_LENGTH):
+                frag = df[
+                    (f_len - GENEROSITY <= df["length"])
+                    & (df["length"] <= f_len + GENEROSITY)
+                ].compute()
+                frag.drop("length", axis=1, inplace=True)
+                np.savetxt(
+                    save_targets[idx],
+                    frag.values.reshape(-1, 1),
+                    fmt="%s",
+                    newline="\n",
+                )
+
+                print(f"{pathlib.Path(file).absolute()}_F{idx + 1}.fastq saved")
+
+        del df
+        gc.collect()
 
     return 0
 
 
 def split(list_a, chunk_size):
     for i in range(0, len(list_a), chunk_size):
-        yield list_a[i: i + chunk_size]
+        yield list_a[i : i + chunk_size]
 
 
 def multi_process(files, n_jobs=N_JOBS):
@@ -66,7 +107,7 @@ def multi_process(files, n_jobs=N_JOBS):
     Multiprocessing
     """
     CHUNK_SIZE = n_jobs
-    for chunk in tqdm(list(split(files, CHUNK_SIZE))):
+    for chunk in list(split(files, CHUNK_SIZE)):
         pool = mp.Pool(n_jobs)
         pool.map_async(sep, chunk)
         pool.close()
@@ -76,7 +117,10 @@ def multi_process(files, n_jobs=N_JOBS):
 if __name__ == "__main__":
 
     files = FILES.split("\n")[1:-1]
-    # multi_process(files)
+    start = time.time()
+    multi_process(files)
+    end = time.time()
 
-    for f in files:
-        sep(f)
+    print(f"Time taken: {end - start}")
+    # for f in files:
+    #     sep(f)
