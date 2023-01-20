@@ -41,7 +41,7 @@ def extract_read_cnts(
     cuda_available = cuda.is_available()
 
     # debug
-    cuda_available = False
+    # cuda_available = False
     if cuda_available:
         import cudf
         print("Nvidia GPU detected!")
