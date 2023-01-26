@@ -15,7 +15,7 @@ import sys
 # logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 # logger = logging.getLogger(__name__)
 
-N_JOBS = 8
+N_JOBS = 4
 CHUNKSIZE = 1e7
 FRAG_LENGTH = [278, 268, 194]
 GENEROSITY = 1
@@ -122,7 +122,6 @@ def multi_process(files, n_jobs=N_JOBS):
     """
     Multiprocessing
     """
-    CHUNK_SIZE = n_jobs
     with ProcessPoolExecutor(max_workers=n_jobs) as executor:
         executor.map(sep, files)
 
