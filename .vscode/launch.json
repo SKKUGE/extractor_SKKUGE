@@ -19,9 +19,9 @@
         "-u",
         "JU",
         "-p",
-        "test_proj",
+        "KRAS",
         "--barcode",
-        "test_barcode.txt"
+        "KRAS_G12D+Barcode_220923+WT_DEL_GOES_BACK_reg_evaded.txt"
       ]
     }
   ]
