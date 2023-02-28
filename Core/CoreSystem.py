@@ -129,7 +129,7 @@ class SystemStructure(object):
             self.output_dir / sample_name
         )
         self.result_dir = Helper.mkdir_if_not(
-            self.output_sample_organizer[sample_name] / "Result"
+            self.output_sample_organizer[sample_name]
         )
 
 

@@ -15,7 +15,7 @@ import sys
 # logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 # logger = logging.getLogger(__name__)
 
-N_JOBS = 4
+N_JOBS = 6
 CHUNKSIZE = 1e7
 FRAG_LENGTH = [278, 268, 194]
 GENEROSITY = 1
@@ -44,7 +44,7 @@ FASTQ_FORMAT = ["id", "sequence", "spacer", "quality"]
 
 def sep(file):
     from torch import cuda
-    
+
     # Open files for chunk processing
     save_targets = defaultdict(object)
 
@@ -127,7 +127,6 @@ def multi_process(files, n_jobs=N_JOBS):
 
 
 if __name__ == "__main__":
-
 
     files = FILES.split("\n")[1:-1]
     start = time.time()
