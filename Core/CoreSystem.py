@@ -48,7 +48,7 @@ class Helper(object):
 
     @staticmethod  ## defensive
     def equal_num_samples_checker(
-        proj_path: pathlib.Path, loaded_samples: list, logger
+            proj_path: pathlib.Path, loaded_samples: list, logger
     ):
         """
         > This function checks if the number of samples in the Input folder and in the User folder
@@ -89,9 +89,9 @@ class Helper(object):
 # > The class creates a directory structure for a user and a project
 class SystemStructure(object):
     def __init__(
-        self,
-        user_name: str,
-        project_name: str,
+            self,
+            user_name: str,
+            project_name: str,
     ):
         # https://www.notion.so/dengardengarden/s-Daily-Scrum-Reports-74d406ce961c4af78366a201c1933b66#cd5b57433eca4c6da36145d81adbbe5e
         self.user_name = user_name
@@ -142,32 +142,32 @@ class ExtractorRunner:
         self.args = args
 
         for idx, file_path in enumerate(
-            [
-                p
-                for p in self.args.system_structure.input_sample_organizer[
+                [
+                    p
+                    for p in self.args.system_structure.input_sample_organizer[
                     self.sample
                 ].glob("*")
-            ]
+                ]
         ):
             # Load input file from input sample folder (only one file)
             if file_path.suffix in [".fastq", ".fq", ".fastq.gz", ".fq.gz"]:
                 args.logger.info(f"File name : {file_path.stem}")
                 self.args.system_structure.input_file_organizer[self.sample] = (
-                    pathlib.Path.cwd() / file_path
+                        pathlib.Path.cwd() / file_path
                 )
                 break
 
             if (
-                idx
-                == len(
-                    [
-                        p
-                        for p in self.args.system_structure.input_sample_organizer[
-                            self.sample
-                        ].glob("*")
-                    ]
-                )
-                - 1
+                    idx
+                    == len(
+                [
+                    p
+                    for p in self.args.system_structure.input_sample_organizer[
+                    self.sample
+                ].glob("*")
+                ]
+            )
+                    - 1
             ):
                 raise Exception("No fastq file in the sample folder")
 
@@ -251,12 +251,22 @@ def run_pipeline(args: SimpleNamespace) -> None:
         listCmd = extractor_runner._populate_command()
 
         args.logger.info("RunMulticore")
-        run_extractor_mp(listCmd, args.multicore, args.logger).to_csv(
-            f"{args.system_structure.result_dir}/{sample}+extraction_result.csv"
-        )
+        if args.verbose:
+            extraction_result, test_result, test_summary = run_extractor_mp(listCmd, args.multicore, args.logger,
+                                                                            args.verbose)
+            extraction_result.to_csv(
+                f"{args.system_structure.result_dir}/{sample}+extraction_result.csv"
+            )
+            test_result.to_csv(f"{args.system_structure.result_dir}/{sample}+multiple_detection_test_result.csv")
+            test_summary.to_csv(f"{args.system_structure.result_dir}/{sample}+multiple_detection_test_summary.csv")
+
+        else:
+            run_extractor_mp(listCmd, args.multicore, args.logger).to_csv(
+                f"{args.system_structure.result_dir}/{sample}+extraction_result.csv"
+            )
 
 
-def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
+def run_extractor_mp(lCmd, iCore, logger, verbose_mode: bool) -> pd.DataFrame:
     import time
     from extractor import main as extractor_main
 
@@ -276,5 +286,17 @@ def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
     df = result.pop()
     for d in result:
         df["Read_counts"] = df["Read_counts"] + d["Read_counts"]
+        df["ID"] = df["ID"] + '\n' + d["ID"]
+        df["Sequence"] = df["Sequence"] + '\n' + d["Sequence"]
+
+    if verbose_mode:
+        test_result = list()
+        for idx, row in df.iterrows():
+            for id in row["ID"].split("\n"):
+                test_result.append((id, row["Barcode"]))
+
+        unique_test = pd.DataFrame(test_result, columns=["Sequence_id", "Barcode"])
+        unique_test_summary = unique_test.groupby("Sequence_id").count()
+        return df, unique_test, unique_test_summary
 
     return df

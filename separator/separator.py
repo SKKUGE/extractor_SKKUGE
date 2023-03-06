@@ -20,22 +20,19 @@ CHUNKSIZE = 1e7
 FRAG_LENGTH = [278, 268, 194]
 GENEROSITY = 1
 FILES = """
-./separator/20220805_1.extendedFrags.fastq
-./separator/20220805_2.extendedFrags.fastq
-./separator/20220805_3.extendedFrags.fastq
-./separator/20220805_4.extendedFrags.fastq
-./separator/20220805_5.extendedFrags.fastq
-./separator/20220805_6.extendedFrags.fastq
-./separator/20220805_7.extendedFrags.fastq
-./separator/20220805_8.extendedFrags.fastq
-./separator/20220930_1.extendedFrags.fastq
-./separator/20220930_2.extendedFrags.fastq
-./separator/20220930_3.extendedFrags.fastq
-./separator/20220930_4.extendedFrags.fastq
-./separator/20220930_5.extendedFrags.fastq
-./separator/20220930_6.extendedFrags.fastq
-./separator/20220930_7.extendedFrags.fastq
-./separator/20220930_8.extendedFrags.fastq
+20220930_2.extendedFrags.fastq
+20220930_3.extendedFrags.fastq
+20220930_4.extendedFrags.fastq
+20220930_5.extendedFrags.fastq
+20220930_6.extendedFrags.fastq
+20220930_7.extendedFrags.fastq
+20220930_8.extendedFrags.fastq
+20220930_9.extendedFrags.fastq
+20221221_1.extendedFrags.fastq
+20221221_2.extendedFrags.fastq
+20221221_3.extendedFrags.fastq
+20221221_4.extendedFrags.fastq
+20221221_5.extendedFrags.fastq
 """
 
 # TODO: seaparating removes the quality metrics of the reads
