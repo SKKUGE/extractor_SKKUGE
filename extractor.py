@@ -45,7 +45,7 @@ def extract_read_cnts(
     if cuda_available:
         import cudf
 
-        print("Nvidia GPU detected!")
+        # print("Nvidia GPU detected!")
 
         seq_df = cudf.DataFrame(
             [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
@@ -54,23 +54,49 @@ def extract_read_cnts(
 
         for idx, row in tqdm(result_df.iterrows()):
             query_result = seq_df["Sequence"].str.contains(row["Barcode"])
-            result_df.loc[idx, "ID"], result_df.loc[idx, "Sequence"], result_df.loc[idx, "Read_counts"] = (
-                '\n'.join(seq_df.loc[query_result[query_result].index]["ID"].to_numpy().tolist()),
-                '\n'.join(seq_df.loc[query_result[query_result].index]["Sequence"].to_numpy().tolist()),
-                query_result.sum()
+            (
+                result_df.loc[idx, "ID"],
+                result_df.loc[idx, "Sequence"],
+                result_df.loc[idx, "Read_counts"],
+            ) = (
+                "\n".join(
+                    seq_df.loc[query_result[query_result].index]["ID"]
+                    .to_numpy()
+                    .tolist()
+                ),
+                "\n".join(
+                    seq_df.loc[query_result[query_result].index]["Sequence"]
+                    .to_numpy()
+                    .tolist()
+                ),
+                query_result.sum(),
             )  # boolean indexing for fast processing
 
-
     else:  # this command not being found can raise quite a few different errors depending on the configuration
-        print("No Nvidia GPU in system!")
+        # print("No Nvidia GPU in system!")
 
         seq_df = pd.DataFrame(
             [seq._string.decode() for seq in seqs], columns=["Sequence"]
         )
         for idx, row in tqdm(result_df.iterrows()):
-            result_df.loc[idx, "Read_counts"] = (
-                seq_df["Sequence"].str.contains(row["Barcode"]).sum()
-            )
+            query_result = seq_df["Sequence"].str.contains(row["Barcode"])
+            (
+                result_df.loc[idx, "ID"],
+                result_df.loc[idx, "Sequence"],
+                result_df.loc[idx, "Read_counts"],
+            ) = (
+                "\n".join(
+                    seq_df.loc[query_result[query_result].index]["ID"]
+                    .to_numpy()
+                    .tolist()
+                ),
+                "\n".join(
+                    seq_df.loc[query_result[query_result].index]["Sequence"]
+                    .to_numpy()
+                    .tolist()
+                ),
+                query_result.sum(),
+            )  # boolean indexing for fast processing
 
     # result_df example
     #                                             Barcode  Read_counts

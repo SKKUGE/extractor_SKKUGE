@@ -128,9 +128,7 @@ class SystemStructure(object):
         self.output_sample_organizer[sample_name] = Helper.mkdir_if_not(
             self.output_dir / sample_name
         )
-        self.result_dir = Helper.mkdir_if_not(
-            self.output_sample_organizer[sample_name]
-        )
+        self.result_dir = Helper.mkdir_if_not(self.output_sample_organizer[sample_name])
 
 
 class ExtractorRunner:
@@ -177,6 +175,26 @@ class ExtractorRunner:
             self.args.system_structure.input_sample_organizer[self.sample]
             / "Split_files"
         )
+
+        if (
+                len(
+                    os.listdir(
+                        f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}"
+                    )
+                )
+                > 0
+        ):
+            sp.run(
+                [
+                    "rm",
+                    "-r",
+                    f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}",
+                ]
+            )
+            self.args.system_structure.seq_split_dir = Helper.mkdir_if_not(
+                self.args.system_structure.input_sample_organizer[self.sample]
+                / "Split_files"
+            )  # Re-create the directory
 
     def _split_into_chunks(self):
 
@@ -251,23 +269,24 @@ def run_pipeline(args: SimpleNamespace) -> None:
         listCmd = extractor_runner._populate_command()
 
         args.logger.info("RunMulticore")
-        if args.verbose:
-            extraction_result, test_result, test_summary = run_extractor_mp(listCmd, args.multicore, args.logger,
-                                                                            args.verbose)
-            extraction_result.to_csv(
-                f"{args.system_structure.result_dir}/{sample}+extraction_result.csv"
-            )
-            test_result.to_csv(f"{args.system_structure.result_dir}/{sample}+multiple_detection_test_result.csv")
-            test_summary.to_csv(f"{args.system_structure.result_dir}/{sample}+multiple_detection_test_summary.csv")
 
-        else:
-            run_extractor_mp(listCmd, args.multicore, args.logger).to_csv(
-                f"{args.system_structure.result_dir}/{sample}+extraction_result.csv"
-            )
+        # Refactor this block of code for flushing memory
+        run_extractor_mp(
+            listCmd,
+            args.multicore,
+            args.logger,
+            args.verbose,
+            args.system_structure.result_dir,
+            sample,
+        )
 
 
-def run_extractor_mp(lCmd, iCore, logger, verbose_mode: bool) -> pd.DataFrame:
+def run_extractor_mp(
+        lCmd, iCore, logger, verbose_mode: bool, result_dir: pathlib.Path, sample_name
+) -> None:
     import time
+    import gc
+    from tqdm import tqdm
     from extractor import main as extractor_main
 
     for sCmd in lCmd:
@@ -276,7 +295,7 @@ def run_extractor_mp(lCmd, iCore, logger, verbose_mode: bool) -> pd.DataFrame:
     result = []
     start = time.time()
     with ProcessPoolExecutor(max_workers=iCore) as executor:
-        for rval in executor.map(extractor_main, lCmd):
+        for rval in list(tqdm(executor.map(extractor_main, lCmd), total=len(lCmd))):
             result.append(rval)
     end = time.time()
     logger.info(f"Extraction is done. {end - start}s elapsed.")
@@ -286,8 +305,8 @@ def run_extractor_mp(lCmd, iCore, logger, verbose_mode: bool) -> pd.DataFrame:
     df = result.pop()
     for d in result:
         df["Read_counts"] = df["Read_counts"] + d["Read_counts"]
-        df["ID"] = df["ID"] + '\n' + d["ID"]
-        df["Sequence"] = df["Sequence"] + '\n' + d["Sequence"]
+        df["ID"] = df["ID"] + "\n" + d["ID"]
+        df["Sequence"] = df["Sequence"] + "\n" + d["Sequence"]
 
     if verbose_mode:
         test_result = list()
@@ -296,7 +315,17 @@ def run_extractor_mp(lCmd, iCore, logger, verbose_mode: bool) -> pd.DataFrame:
                 test_result.append((id, row["Barcode"]))
 
         unique_test = pd.DataFrame(test_result, columns=["Sequence_id", "Barcode"])
+        unique_test.to_csv(
+            f"{result_dir}/{sample_name}+multiple_detection_test_result.csv"
+        )
         unique_test_summary = unique_test.groupby("Sequence_id").count()
-        return df, unique_test, unique_test_summary
+        unique_test_summary.to_csv(
+            f"{result_dir}/{sample_name}+multiple_detection_test_summary.csv"
+        )
+        del unique_test
+        del unique_test_summary
+        gc.collect()
 
-    return df
+    df.to_csv(f"{result_dir}/{sample_name}+extraction_result.csv")
+
+    return
