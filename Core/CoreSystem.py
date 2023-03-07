@@ -48,7 +48,7 @@ class Helper(object):
 
     @staticmethod  ## defensive
     def equal_num_samples_checker(
-            proj_path: pathlib.Path, loaded_samples: list, logger
+        proj_path: pathlib.Path, loaded_samples: list, logger
     ):
         """
         > This function checks if the number of samples in the Input folder and in the User folder
@@ -89,9 +89,9 @@ class Helper(object):
 # > The class creates a directory structure for a user and a project
 class SystemStructure(object):
     def __init__(
-            self,
-            user_name: str,
-            project_name: str,
+        self,
+        user_name: str,
+        project_name: str,
     ):
         # https://www.notion.so/dengardengarden/s-Daily-Scrum-Reports-74d406ce961c4af78366a201c1933b66#cd5b57433eca4c6da36145d81adbbe5e
         self.user_name = user_name
@@ -129,6 +129,19 @@ class SystemStructure(object):
             self.output_dir / sample_name
         )
         self.result_dir = Helper.mkdir_if_not(self.output_sample_organizer[sample_name])
+        self.parquet_dir = Helper.mkdir_if_not(self.result_dir / "parquets")
+
+        if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
+            sp.run(
+                [
+                    "rm",
+                    "-r",
+                    f"{self.result_dir / 'parquets'}",
+                ]
+            )
+            self.parquet_dir = Helper.mkdir_if_not(
+                self.result_dir / "parquets"
+            )  # Re-create the directory
 
 
 class ExtractorRunner:
@@ -140,32 +153,32 @@ class ExtractorRunner:
         self.args = args
 
         for idx, file_path in enumerate(
-                [
-                    p
-                    for p in self.args.system_structure.input_sample_organizer[
+            [
+                p
+                for p in self.args.system_structure.input_sample_organizer[
                     self.sample
                 ].glob("*")
-                ]
+            ]
         ):
             # Load input file from input sample folder (only one file)
             if file_path.suffix in [".fastq", ".fq", ".fastq.gz", ".fq.gz"]:
                 args.logger.info(f"File name : {file_path.stem}")
                 self.args.system_structure.input_file_organizer[self.sample] = (
-                        pathlib.Path.cwd() / file_path
+                    pathlib.Path.cwd() / file_path
                 )
                 break
 
             if (
-                    idx
-                    == len(
-                [
-                    p
-                    for p in self.args.system_structure.input_sample_organizer[
-                    self.sample
-                ].glob("*")
-                ]
-            )
-                    - 1
+                idx
+                == len(
+                    [
+                        p
+                        for p in self.args.system_structure.input_sample_organizer[
+                            self.sample
+                        ].glob("*")
+                    ]
+                )
+                - 1
             ):
                 raise Exception("No fastq file in the sample folder")
 
@@ -177,12 +190,12 @@ class ExtractorRunner:
         )
 
         if (
-                len(
-                    os.listdir(
-                        f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}"
-                    )
+            len(
+                os.listdir(
+                    f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}"
                 )
-                > 0
+            )
+            > 0
         ):
             sp.run(
                 [
@@ -215,7 +228,6 @@ class ExtractorRunner:
         )
 
     def _populate_command(self):
-
         return [
             (
                 str(pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f),
@@ -225,6 +237,7 @@ class ExtractorRunner:
                     / self.args.barcode
                 ),
                 self.args.logger,
+                f"{(pathlib.Path(self.args.system_structure.result_dir) / 'parquets').absolute()}",
             )
             for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
             if f.endswith(".fastq")
@@ -279,15 +292,29 @@ def run_pipeline(args: SimpleNamespace) -> None:
             args.system_structure.result_dir,
             sample,
         )
+        sp.run(
+            [
+                "rm",
+                "-r",
+                f"{pathlib.Path.cwd() / args.system_structure.seq_split_dir}",
+            ]
+        )
 
 
 def run_extractor_mp(
-        lCmd, iCore, logger, verbose_mode: bool, result_dir: pathlib.Path, sample_name
+    lCmd, iCore, logger, verbose_mode: bool, result_dir: pathlib.Path, sample_name
 ) -> None:
     import time
     import gc
     from tqdm import tqdm
+    import dask.dataframe as dd
     from extractor import main as extractor_main
+
+    def name():
+        from datetime import datetime
+
+        dt_string = datetime.now().strftime("%Y-%m-%d;%H:%M:%S")
+        return str(dt_string)
 
     for sCmd in lCmd:
         logger.info(f"Running {sCmd} command with {iCore} cores")
@@ -296,36 +323,52 @@ def run_extractor_mp(
     start = time.time()
     with ProcessPoolExecutor(max_workers=iCore) as executor:
         for rval in list(tqdm(executor.map(extractor_main, lCmd), total=len(lCmd))):
-            result.append(rval)
+            pass
     end = time.time()
     logger.info(f"Extraction is done. {end - start}s elapsed.")
     logger.info(f"All extraction subprocesses completed")
     logger.info(f"Merging extraction results...")
 
-    df = result.pop()
-    for d in result:
-        df["Read_counts"] = df["Read_counts"] + d["Read_counts"]
-        df["ID"] = df["ID"] + "\n" + d["ID"]
-        df["Sequence"] = df["Sequence"] + "\n" + d["Sequence"]
+    # load multiple csv files into one dask dataframe
+    df = dd.concat(
+        [
+            dd.read_parquet(f)
+            for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet")
+        ]
+    )
+    df.to_csv(
+        f"{result_dir}/{sample_name}+extraction_result.csv", single_file=True
+    )
 
     if verbose_mode:
-        test_result = list()
-        for idx, row in df.iterrows():
-            for id in row["ID"].split("\n"):
-                test_result.append((id, row["Barcode"]))
+        # open a CSV file for writing
+        with open(
+            f"{result_dir}/{sample_name}+multiple_detection_test_result.csv",
+            "w",
+            newline="",
+        ) as csvfile:
+            import csv
 
-        unique_test = pd.DataFrame(test_result, columns=["Sequence_id", "Barcode"])
-        unique_test.to_csv(
+            # create a CSV writer object
+            writer = csv.writer(csvfile)
+
+            # write the header row
+            writer.writerow(["Sequence_id", "Barcode"])
+
+            # write the data rows
+            for _, row in df.iterrows():
+                for id in row["ID"].split("\n"):
+                    writer.writerow((id, row["Barcode"]))
+
+        unique_test = dd.read_csv(
             f"{result_dir}/{sample_name}+multiple_detection_test_result.csv"
         )
-        unique_test_summary = unique_test.groupby("Sequence_id").count()
+        unique_test_summary = unique_test.groupby("Sequence_id").count().compute()
         unique_test_summary.to_csv(
             f"{result_dir}/{sample_name}+multiple_detection_test_summary.csv"
         )
         del unique_test
         del unique_test_summary
         gc.collect()
-
-    df.to_csv(f"{result_dir}/{sample_name}+extraction_result.csv")
 
     return
