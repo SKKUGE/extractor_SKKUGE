@@ -328,7 +328,8 @@ def run_extractor_mp(
     logger.info(f"Extraction is done. {end - start}s elapsed.")
     logger.info(f"All extraction subprocesses completed")
     logger.info(f"Merging extraction results...")
-
+    
+    # TODO: asynchronous merging of parquet files
     # load multiple csv files into one dask dataframe
     df = dd.concat(
         [
@@ -361,7 +362,8 @@ def run_extractor_mp(
                     writer.writerow((id, row["Barcode"]))
 
         unique_test = dd.read_csv(
-            f"{result_dir}/{sample_name}+multiple_detection_test_result.csv"
+            f"{result_dir}/{sample_name}+multiple_detection_test_result.csv",
+            dtype={'Sequence_id': 'object'}            
         )
         unique_test_summary = unique_test.groupby("Sequence_id").count().compute()
         unique_test_summary.to_csv(
