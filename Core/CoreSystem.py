@@ -307,6 +307,7 @@ def run_extractor_mp(
     import time
     import gc
     from tqdm import tqdm
+    import numpy as np
     import dask.dataframe as dd
     from extractor import main as extractor_main
 
@@ -328,7 +329,7 @@ def run_extractor_mp(
     logger.info(f"Extraction is done. {end - start}s elapsed.")
     logger.info(f"All extraction subprocesses completed")
     logger.info(f"Merging extraction results...")
-    
+
     # TODO: asynchronous merging of parquet files
     # load multiple csv files into one dask dataframe
     df = dd.concat(
@@ -337,9 +338,22 @@ def run_extractor_mp(
             for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet")
         ]
     )
-    df.to_csv(
-        f"{result_dir}/{sample_name}+extraction_result.csv", single_file=True
-    )
+
+    def aggregate_extractor_results(x):
+        d = {}
+        v1 = np.array(x["Read_counts"])
+        v2 = np.array(x["ID"])
+
+        d["Read_counts"] = v1.sum()
+        d["ID"] = "\n".join(list(v2))
+
+        return pd.DataFrame(d, index=["Read_counts", "ID"])
+
+    df.groupby(["Gene", "Barcode"]).apply(
+        aggregate_extractor_results, meta={"Read_counts": "int64", "ID": "object"}
+    ).compute()
+
+    df.to_csv(f"{result_dir}/{sample_name}+extraction_result.csv", single_file=True)
 
     if verbose_mode:
         # open a CSV file for writing
@@ -363,7 +377,7 @@ def run_extractor_mp(
 
         unique_test = dd.read_csv(
             f"{result_dir}/{sample_name}+multiple_detection_test_result.csv",
-            dtype={'Sequence_id': 'object'}            
+            dtype={"Sequence_id": "object"},
         )
         unique_test_summary = unique_test.groupby("Sequence_id").count().compute()
         unique_test_summary.to_csv(
