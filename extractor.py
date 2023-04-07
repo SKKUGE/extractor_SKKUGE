@@ -27,9 +27,9 @@ def extract_read_cnts(
     # Load barcode file
     result_df = pd.read_csv(
         barcode_file, sep=":", header=None, names=["Gene", "Barcode"]
-    ).set_index(
-        "Gene"
-    )  # TODO: tentative design
+    )
+    result_df["Barcode_copy"] = result_df["Barcode"]
+    result_df = result_df.set_index("Barcode")  # TODO: tentative design
 
     # Load a split sequencing result using high-level I/O; validating fastq format
     result_df["Read_counts"] = 0
@@ -42,55 +42,57 @@ def extract_read_cnts(
 
     # debug
     # cuda_available = False
-    if cuda_available:
-        import cudf
+    # if cuda_available:
+    #     import cudf
 
-        # print("Nvidia GPU detected!")
+    #     # print("Nvidia GPU detected!")
 
-        seq_df = cudf.DataFrame(
-            [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
-            columns=["ID", "Sequence"],
-        )
+    #     seq_df = cudf.DataFrame(
+    #         [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
+    #         columns=["ID", "Sequence"],
+    #     )
 
-        for idx, row in tqdm(result_df.iterrows()):
-            query_result = seq_df["Sequence"].str.contains(row["Barcode"])
-            (
-                result_df.loc[idx, "ID"],
-                result_df.loc[idx, "Sequence"],
-                result_df.loc[idx, "Read_counts"],
-            ) = (
-                "\n".join(
-                    seq_df.loc[query_result[query_result].index]["ID"]
-                    .to_numpy()
-                    .tolist()
-                ),
-                "\n".join(
-                    seq_df.loc[query_result[query_result].index]["Sequence"]
-                    .to_numpy()
-                    .tolist()
-                ),
-                query_result.sum(),
-            )  # boolean indexing for fast processing
+    #     for idx, row in tqdm(result_df.iterrows()):
+    #         query_result = seq_df["Sequence"].str.contains(row["Barcode_copy"])
+    #         (
+    #             result_df.loc[idx, "ID"],
+    #             result_df.loc[idx, "Sequence"],
+    #             result_df.loc[idx, "Read_counts"],
+    #         ) = (
+    #             "\n".join(
+    #                 seq_df.loc[query_result[query_result].index]["ID"]
+    #                 .to_numpy()
+    #                 .tolist()
+    #             ),
+    #             "\n".join(
+    #                 seq_df.loc[query_result[query_result].index]["Sequence"]
+    #                 .to_numpy()
+    #                 .tolist()
+    #             ),
+    #             query_result.sum(),
+    #         )  # boolean indexing for fast processing
 
-    else:  # this command not being found can raise quite a few different errors depending on the configuration
-        # print("No Nvidia GPU in system!")
+    # else:  # this command not being found can raise quite a few different errors depending on the configuration
+    #     # print("No Nvidia GPU in system!")
 
-        seq_df = pd.DataFrame(
-            [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
-            columns=["ID", "Sequence"],
-        )
-        for idx, row in tqdm(result_df.iterrows()):
-            query_result = seq_df["Sequence"].str.contains(row["Barcode"])
-            (result_df.loc[idx, "ID"], result_df.loc[idx, "Read_counts"],) = (
-                "\n".join(
-                    seq_df.loc[query_result[query_result].index]["ID"]
-                    .to_numpy()
-                    .tolist()
-                ),
-                query_result.sum(),
-            )  # boolean indexing for fast processing
+    seq_df = pd.DataFrame(
+        [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
+        columns=["ID", "Sequence"],
+    )
+    for idx, row in tqdm(result_df.iterrows()):
+        query_result = seq_df["Sequence"].str.contains(row["Barcode_copy"])
+        (result_df.loc[idx, "ID"], result_df.loc[idx, "Read_counts"],) = (
+            "\n".join(
+                seq_df.loc[query_result[query_result].index]["ID"].to_numpy().tolist()
+            ),
+            query_result.sum(),
+        )  # boolean indexing for fast processing
     del seq_df
     gc.collect()
+
+    result_df.drop("Barcode_copy", axis=1, inplace=True)
+    result_df.reset_index(inplace=True, drop=False)
+    result_df.iloc[1], result_df.iloc[-1] = result_df.iloc[-1], result_df.iloc[1]
 
     def name():
         from datetime import datetime

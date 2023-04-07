@@ -309,6 +309,7 @@ def run_extractor_mp(
     from tqdm import tqdm
     import numpy as np
     import dask.dataframe as dd
+    from functools import reduce
     from extractor import main as extractor_main
 
     def name():
@@ -332,28 +333,37 @@ def run_extractor_mp(
 
     # TODO: asynchronous merging of parquet files
     # load multiple csv files into one dask dataframe
-    df = dd.concat(
+    def aggregate_extractor_results(x, y):
+        x["Read_counts"] += y["Read_counts"]
+        x["ID"] = "\n".join([id for id in x["ID"] if id != ""])
+        
+        return x
+
+    df = reduce(
+        lambda x, y: aggregate_extractor_results(x, y),
         [
             dd.read_parquet(f)
             for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet")
-        ]
+        ],
     )
 
-    def aggregate_extractor_results(x):
-        d = {}
-        v1 = np.array(x["Read_counts"])
-        v2 = np.array(x["ID"])
+    df = (
+        df.groupby(["Gene", "Barcode"])
+        .apply(
+            lambda x: aggregate_extractor_results(x),
+            meta={
+                "Read_counts": "int64",
+                "ID": "object",
+                "Barcode": "object",
+                "Gene": "object",
+            },
+        )
+        .reset_index()
+    )
 
-        d["Read_counts"] = v1.sum()
-        d["ID"] = "\n".join(list(v2))
-
-        return pd.DataFrame(d, index=["Read_counts", "ID"])
-
-    df.groupby(["Gene", "Barcode"]).apply(
-        aggregate_extractor_results, meta={"Read_counts": "int64", "ID": "object"}
-    ).compute()
-
-    df.to_csv(f"{result_dir}/{sample_name}+extraction_result.csv", single_file=True)
+    df.compute().to_csv(
+        f"{result_dir}/{sample_name}+extraction_result.csv", index=False
+    )
 
     if verbose_mode:
         # open a CSV file for writing
