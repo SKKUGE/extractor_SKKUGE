@@ -13,11 +13,12 @@ import pandas as pd
 from tqdm import tqdm
 import skbio
 import gc
+import numpy as np
 
 
 def extract_read_cnts(
     sequence_file: pathlib.Path, barcode_file: pathlib.Path, result_dir
-) -> None:
+):
     # df index == barcode, column == read count
 
     from torch import cuda
@@ -28,7 +29,14 @@ def extract_read_cnts(
     result_df = pd.read_csv(
         barcode_file, sep=":", header=None, names=["Gene", "Barcode"]
     )
+    if not result_df["Barcode"].is_unique:
+        # Barcode used as a PK in the database, so duplication is not allowed
+        print("Barcode duplication detected!")
+        print("Remove duplicated Barcodes... only the first one will be kept.")
+        result_df.drop_duplicates(subset=["Barcode"], keep="first", inplace=True)
+
     result_df["Barcode_copy"] = result_df["Barcode"]
+
     result_df = result_df.set_index("Barcode")  # TODO: tentative design
 
     # Load a split sequencing result using high-level I/O; validating fastq format
@@ -41,49 +49,55 @@ def extract_read_cnts(
     cuda_available = False
 
     # debug
-    if cuda_available:
-        import cudf
+    # if cuda_available:
+    #     import cudf
 
-        # print("Nvidia GPU detected!")
+    #     # print("Nvidia GPU detected!")
 
-        seq_df = cudf.DataFrame(
-            [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
-            columns=["ID", "Sequence"],
+    #     seq_df = cudf.DataFrame(
+    #         [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
+    #         columns=["ID", "Sequence"],
+    #     )
+
+    #     for idx, row in tqdm(result_df.iterrows()):
+    #         query_result = seq_df["Sequence"].str.contains(row["Barcode_copy"])
+    #         (
+    #             result_df.loc[idx, "ID"],
+    #             result_df.loc[idx, "Sequence"],
+    #             result_df.loc[idx, "Read_counts"],
+    #         ) = (
+    #             "\n".join(
+    #                 seq_df.loc[query_result[query_result].index]["ID"]
+    #                 .to_numpy()
+    #                 .tolist()
+    #             ),
+    #             "\n".join(
+    #                 seq_df.loc[query_result[query_result].index]["Sequence"]
+    #                 .to_numpy()
+    #                 .tolist()
+    #             ),
+    #             query_result.sum(),
+    #         )  # boolean indexing for fast processing
+
+    # else:  # this command not being found can raise quite a few different errors depending on the configuration
+    #     # print("No Nvidia GPU in system!")
+
+    seq_df = pd.DataFrame(
+        [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
+        columns=["ID", "Sequence"],
+    )
+    seq_detection_array = np.zeros(seq_df.shape[0], dtype=bool)
+
+    for idx, row in tqdm(result_df.iterrows()):
+        query_result = seq_df["Sequence"].str.contains(row["Barcode_copy"])
+        # boolean indexing for fast processing
+        result_df.at[idx, "ID"] = (
+            seq_df.loc[query_result[query_result].index]["ID"].to_numpy().tolist()
         )
+        result_df.loc[idx, "Read_counts"] = (query_result.sum(),)
 
-        for idx, row in tqdm(result_df.iterrows()):
-            query_result = seq_df["Sequence"].str.contains(row["Barcode_copy"])
-            (
-                result_df.loc[idx, "ID"],
-                result_df.loc[idx, "Sequence"],
-                result_df.loc[idx, "Read_counts"],
-            ) = (
-                "\n".join(
-                    seq_df.loc[query_result[query_result].index]["ID"]
-                    .to_numpy()
-                    .tolist()
-                ),
-                "\n".join(
-                    seq_df.loc[query_result[query_result].index]["Sequence"]
-                    .to_numpy()
-                    .tolist()
-                ),
-                query_result.sum(),
-            )  # boolean indexing for fast processing
+        seq_detection_array[query_result[query_result].index] = True
 
-    else:  # this command not being found can raise quite a few different errors depending on the configuration
-        # print("No Nvidia GPU in system!")
-
-        seq_df = pd.DataFrame(
-            [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
-            columns=["ID", "Sequence"],
-        )
-        for idx, row in tqdm(result_df.iterrows()):
-            query_result = seq_df["Sequence"].str.contains(row["Barcode_copy"])
-            result_df.at[idx, "ID"], result_df.loc[idx, "Read_counts"] = (
-                seq_df.loc[query_result[query_result].index]["ID"].to_numpy().tolist(),
-                query_result.sum(),
-            )  # boolean indexing for fast processing
     del seq_df
     gc.collect()
 
@@ -103,15 +117,8 @@ def extract_read_cnts(
 
     del result_df
     gc.collect()
-    return
-    # result_df example
-    #                                             Barcode  Read_counts
-    # Gene
-    # Frag1_Pos_1_M_F     TTCACTGAATATAAACTTGTGGTAGTT            0
-    # Frag1_Pos_1_M_Y     TACACTGAATATAAACTTGTGGTAGTT            0
-    # Frag1_Pos_1_M_C     TGCACTGAATATAAACTTGTGGTAGTT            0
-    # Frag1_Pos_1_M_STOP  TGAACTGAATATAAACTTGTGGTAGTT            0
-    # Frag1_Pos_1_M_W     TGGACTGAATATAAACTTGTGGTAGTT            0
+    
+    return seq_detection_array
 
 
 def main(*args) -> pd.DataFrame:

@@ -13,7 +13,7 @@
       "justMyCode": true,
       "args": [
         "-t",
-        "3",
+        "16",
         "-c",
         "100000",
         "-u",
@@ -21,7 +21,7 @@
         "-p",
         "CTL",
         "--barcode",
-        "20230314_JSH/test.csv",
+        "20230314_JSH/DGKO.csv",
         "-v"
       ]
     }

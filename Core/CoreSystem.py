@@ -309,14 +309,7 @@ def run_extractor_mp(
     from tqdm import tqdm
     import numpy as np
     import dask.dataframe as dd
-    from functools import reduce
     from extractor import main as extractor_main
-
-    def name():
-        from datetime import datetime
-
-        dt_string = datetime.now().strftime("%Y-%m-%d;%H:%M:%S")
-        return str(dt_string)
 
     for sCmd in lCmd:
         logger.info(f"Running {sCmd} command with {iCore} cores")
@@ -325,20 +318,27 @@ def run_extractor_mp(
     start = time.time()
     with ProcessPoolExecutor(max_workers=iCore) as executor:
         for rval in list(tqdm(executor.map(extractor_main, lCmd), total=len(lCmd))):
-            pass
+            result.append(rval)
     end = time.time()
     logger.info(f"Extraction is done. {end - start}s elapsed.")
-    logger.info(f"All extraction subprocesses completed")
-    logger.info(f"Merging extraction results...")
+
+    logger.info(f"Generating statistics...")
+
+    with open(f"{result_dir}/{sample_name}+read_statstics.txt", "w") as f:
+        read_stat = np.concatenate([rval for rval in result], axis=0)
+        detected, total_read, detection_rate = (
+            read_stat.sum(),
+            read_stat.shape[0],
+            read_stat.sum() / read_stat.shape[0],
+        )
+        f.write(f"Total read: {total_read}\n")
+        f.write(f"Detected read: {detected}\n")
+        f.write(f"Detection rate in the sequence pool: {detection_rate}\n")
+
+    logger.info(f"Generating final extraction results...")
 
     # TODO: asynchronous merging of parquet files
     # load multiple csv files into one dask dataframe
-    def aggregate_extractor_results(x, y):
-        x["Read_counts"] += y["Read_counts"]
-        x["ID"] = "\n".join([id for id in x["ID"] if id != ""])
-
-        return x
-
     df = dd.concat(
         [
             dd.read_parquet(f).explode("ID")
@@ -352,7 +352,7 @@ def run_extractor_mp(
 
     if verbose_mode:
         # Create NGS_ID_classification.csv
-        
+
         df.drop(["Read_counts"], axis=1).dropna(subset=["ID"]).set_index(
             "ID"
         ).compute().to_csv(
@@ -360,8 +360,10 @@ def run_extractor_mp(
         )
         # Create Barcode_multiple_detection_test.csv
         df.groupby(["ID"])["Barcode"].count().compute().to_csv(
-            f"{result_dir}/{sample_name}+multiple_detection_test_summary.csv"
+            f"{result_dir}/{sample_name}+multiple_detection_test_by_id.csv"
         )
+
+        # Create statistics for analysis
         gc.collect()
 
     return
