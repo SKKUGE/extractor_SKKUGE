@@ -8,20 +8,21 @@
       "name": "Python: Current File",
       "type": "python",
       "request": "launch",
-      "program": "${file}",
+      "program": "run_extractor.py",
       "console": "integratedTerminal",
       "justMyCode": true,
       "args": [
         "-t",
-        "8",
+        "16",
         "-c",
-        "1000000",
+        "100000",
         "-u",
-        "JU",
+        "JSH",
         "-p",
-        "test_proj",
+        "CTL",
         "--barcode",
-        "test_barcode.txt"
+        "20230314_JSH/DGKO.csv",
+        "-v"
       ]
     }
   ]

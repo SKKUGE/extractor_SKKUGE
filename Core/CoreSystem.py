@@ -128,9 +128,20 @@ class SystemStructure(object):
         self.output_sample_organizer[sample_name] = Helper.mkdir_if_not(
             self.output_dir / sample_name
         )
-        self.result_dir = Helper.mkdir_if_not(
-            self.output_sample_organizer[sample_name] / "Result"
-        )
+        self.result_dir = Helper.mkdir_if_not(self.output_sample_organizer[sample_name])
+        self.parquet_dir = Helper.mkdir_if_not(self.result_dir / "parquets")
+
+        if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
+            sp.run(
+                [
+                    "rm",
+                    "-r",
+                    f"{self.result_dir / 'parquets'}",
+                ]
+            )
+            self.parquet_dir = Helper.mkdir_if_not(
+                self.result_dir / "parquets"
+            )  # Re-create the directory
 
 
 class ExtractorRunner:
@@ -178,6 +189,26 @@ class ExtractorRunner:
             / "Split_files"
         )
 
+        if (
+            len(
+                os.listdir(
+                    f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}"
+                )
+            )
+            > 0
+        ):
+            sp.run(
+                [
+                    "rm",
+                    "-r",
+                    f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}",
+                ]
+            )
+            self.args.system_structure.seq_split_dir = Helper.mkdir_if_not(
+                self.args.system_structure.input_sample_organizer[self.sample]
+                / "Split_files"
+            )  # Re-create the directory
+
     def _split_into_chunks(self):
 
         ### Defensive : original fastq wc == split fastq wc
@@ -197,7 +228,6 @@ class ExtractorRunner:
         )
 
     def _populate_command(self):
-
         return [
             (
                 str(pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f),
@@ -207,6 +237,7 @@ class ExtractorRunner:
                     / self.args.barcode
                 ),
                 self.args.logger,
+                f"{(pathlib.Path(self.args.system_structure.result_dir) / 'parquets').absolute()}",
             )
             for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
             if f.endswith(".fastq")
@@ -251,13 +282,33 @@ def run_pipeline(args: SimpleNamespace) -> None:
         listCmd = extractor_runner._populate_command()
 
         args.logger.info("RunMulticore")
-        run_extractor_mp(listCmd, args.multicore, args.logger).to_csv(
-            f"{args.system_structure.result_dir}/{sample}+extraction_result.csv"
+
+        # Refactor this block of code for flushing memory
+        run_extractor_mp(
+            listCmd,
+            args.multicore,
+            args.logger,
+            args.verbose,
+            args.system_structure.result_dir,
+            sample,
+        )
+        sp.run(
+            [
+                "rm",
+                "-r",
+                f"{pathlib.Path.cwd() / args.system_structure.seq_split_dir}",
+            ]
         )
 
 
-def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
+def run_extractor_mp(
+    lCmd, iCore, logger, verbose_mode: bool, result_dir: pathlib.Path, sample_name
+) -> None:
     import time
+    import gc
+    from tqdm import tqdm
+    import numpy as np
+    import dask.dataframe as dd
     from extractor import main as extractor_main
 
     for sCmd in lCmd:
@@ -266,15 +317,53 @@ def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
     result = []
     start = time.time()
     with ProcessPoolExecutor(max_workers=iCore) as executor:
-        for rval in executor.map(extractor_main, lCmd):
+        for rval in list(tqdm(executor.map(extractor_main, lCmd), total=len(lCmd))):
             result.append(rval)
     end = time.time()
     logger.info(f"Extraction is done. {end - start}s elapsed.")
-    logger.info(f"All extraction subprocesses completed")
-    logger.info(f"Merging extraction results...")
 
-    df = result.pop()
-    for d in result:
-        df["Read_counts"] = df["Read_counts"] + d["Read_counts"]
+    logger.info(f"Generating statistics...")
 
-    return df
+    with open(f"{result_dir}/{sample_name}+read_statstics.txt", "w") as f:
+        read_stat = np.concatenate([rval for rval in result], axis=0)
+        detected, total_read, detection_rate = (
+            read_stat.sum(),
+            read_stat.shape[0],
+            read_stat.sum() / read_stat.shape[0],
+        )
+        f.write(f"Total read: {total_read}\n")
+        f.write(f"Detected read: {detected}\n")
+        f.write(f"Detection rate in the sequence pool: {detection_rate}\n")
+
+    logger.info(f"Generating final extraction results...")
+
+    # TODO: asynchronous merging of parquet files
+    # load multiple csv files into one dask dataframe
+    df = dd.concat(
+        [
+            dd.read_parquet(f).explode("ID")
+            for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet")
+        ]
+    )
+
+    df.drop(["ID"], axis=1).groupby(["Gene", "Barcode"]).sum().compute().to_csv(
+        f"{result_dir}/{sample_name}+extraction_result.csv", index=True
+    )
+
+    if verbose_mode:
+        # Create NGS_ID_classification.csv
+
+        df.drop(["Read_counts"], axis=1).dropna(subset=["ID"]).set_index(
+            "ID"
+        ).compute().to_csv(
+            f"{result_dir}/{sample_name}+multiple_detection_test_result.csv", index=True
+        )
+        # Create Barcode_multiple_detection_test.csv
+        df.groupby(["ID"])["Barcode"].count().compute().to_csv(
+            f"{result_dir}/{sample_name}+multiple_detection_test_by_id.csv"
+        )
+
+        # Create statistics for analysis
+        gc.collect()
+
+    return

@@ -9,17 +9,30 @@ import gc
 import pathlib
 from collections import defaultdict
 import time
+import logging
+import sys
 
-N_JOBS = 8
+# logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+# logger = logging.getLogger(__name__)
+
+N_JOBS = 6
 CHUNKSIZE = 1e7
 FRAG_LENGTH = [278, 268, 194]
 GENEROSITY = 1
 FILES = """
-./separator/20230109_1.extendedFrags.fastq
-./separator/20230109_2.extendedFrags.fastq
-./separator/20230109_3.extendedFrags.fastq
-./separator/20230109_4.extendedFrags.fastq
-./separator/20230109_5.extendedFrags.fastq
+20220930_2.extendedFrags.fastq
+20220930_3.extendedFrags.fastq
+20220930_4.extendedFrags.fastq
+20220930_5.extendedFrags.fastq
+20220930_6.extendedFrags.fastq
+20220930_7.extendedFrags.fastq
+20220930_8.extendedFrags.fastq
+20220930_9.extendedFrags.fastq
+20221221_1.extendedFrags.fastq
+20221221_2.extendedFrags.fastq
+20221221_3.extendedFrags.fastq
+20221221_4.extendedFrags.fastq
+20221221_5.extendedFrags.fastq
 """
 
 # TODO: seaparating removes the quality metrics of the reads
@@ -97,21 +110,17 @@ def sep(file):
     return 0
 
 
-def split(list_a, chunk_size):
-    for i in range(0, len(list_a), chunk_size):
-        yield list_a[i : i + chunk_size]
+# def split(list_a, chunk_size):
+#     for i in range(0, len(list_a), chunk_size):
+#         yield list_a[i : i + chunk_size]
 
 
 def multi_process(files, n_jobs=N_JOBS):
     """
     Multiprocessing
     """
-    CHUNK_SIZE = n_jobs
-    for chunk in list(split(files, CHUNK_SIZE)):
-        pool = mp.Pool(n_jobs)
-        pool.map_async(sep, chunk)
-        pool.close()
-        pool.join()
+    with ProcessPoolExecutor(max_workers=n_jobs) as executor:
+        executor.map(sep, files)
 
 
 if __name__ == "__main__":

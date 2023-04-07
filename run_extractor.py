@@ -55,6 +55,14 @@ def main():
         type=str,
         help="The project name with no space",
     )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="unique mutation test",
+    )
+
     args = parser.parse_args()
 
     system_structure = SystemStructure(args.user_name, args.project_name)
