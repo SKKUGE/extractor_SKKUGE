@@ -336,65 +336,32 @@ def run_extractor_mp(
     def aggregate_extractor_results(x, y):
         x["Read_counts"] += y["Read_counts"]
         x["ID"] = "\n".join([id for id in x["ID"] if id != ""])
-        
+
         return x
 
-    df = reduce(
-        lambda x, y: aggregate_extractor_results(x, y),
+    df = dd.concat(
         [
-            dd.read_parquet(f)
+            dd.read_parquet(f).explode("ID")
             for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet")
-        ],
+        ]
     )
 
-    df = (
-        df.groupby(["Gene", "Barcode"])
-        .apply(
-            lambda x: aggregate_extractor_results(x),
-            meta={
-                "Read_counts": "int64",
-                "ID": "object",
-                "Barcode": "object",
-                "Gene": "object",
-            },
-        )
-        .reset_index()
-    )
-
-    df.compute().to_csv(
-        f"{result_dir}/{sample_name}+extraction_result.csv", index=False
+    df.drop(["ID"], axis=1).groupby(["Gene", "Barcode"]).sum().compute().to_csv(
+        f"{result_dir}/{sample_name}+extraction_result.csv", index=True
     )
 
     if verbose_mode:
-        # open a CSV file for writing
-        with open(
-            f"{result_dir}/{sample_name}+multiple_detection_test_result.csv",
-            "w",
-            newline="",
-        ) as csvfile:
-            import csv
-
-            # create a CSV writer object
-            writer = csv.writer(csvfile)
-
-            # write the header row
-            writer.writerow(["Sequence_id", "Barcode"])
-
-            # write the data rows
-            for _, row in df.iterrows():
-                for id in row["ID"].split("\n"):
-                    writer.writerow((id, row["Barcode"]))
-
-        unique_test = dd.read_csv(
-            f"{result_dir}/{sample_name}+multiple_detection_test_result.csv",
-            dtype={"Sequence_id": "object"},
+        # Create NGS_ID_classification.csv
+        
+        df.drop(["Read_counts"], axis=1).dropna(subset=["ID"]).set_index(
+            "ID"
+        ).compute().to_csv(
+            f"{result_dir}/{sample_name}+multiple_detection_test_result.csv", index=True
         )
-        unique_test_summary = unique_test.groupby("Sequence_id").count().compute()
-        unique_test_summary.to_csv(
+        # Create Barcode_multiple_detection_test.csv
+        df.groupby(["ID"])["Barcode"].count().compute().to_csv(
             f"{result_dir}/{sample_name}+multiple_detection_test_summary.csv"
         )
-        del unique_test
-        del unique_test_summary
         gc.collect()
 
     return
