@@ -117,7 +117,7 @@ def extract_read_cnts(
 
     del result_df
     gc.collect()
-    
+
     return seq_detection_array
 
 

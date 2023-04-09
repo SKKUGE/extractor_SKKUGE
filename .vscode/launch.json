@@ -17,11 +17,11 @@
         "-c",
         "100000",
         "-u",
-        "JSH",
+        "RPM",
         "-p",
-        "CTL",
+        "barcode_finder",
         "--barcode",
-        "20230314_JSH/DGKO.csv",
+        "20230409_RPM_request.txt",
         "-v"
       ]
     }
