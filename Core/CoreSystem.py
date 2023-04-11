@@ -238,6 +238,7 @@ class ExtractorRunner:
                 ),
                 self.args.logger,
                 f"{(pathlib.Path(self.args.system_structure.result_dir) / 'parquets').absolute()}",
+                self.args.sep
             )
             for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
             if f.endswith(".fastq")

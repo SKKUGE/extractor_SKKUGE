@@ -13,7 +13,7 @@
       "justMyCode": true,
       "args": [
         "-t",
-        "16",
+        "32",
         "-c",
         "100000",
         "-u",
@@ -21,8 +21,10 @@
         "-p",
         "barcode_finder",
         "--barcode",
-        "20230409_RPM_request.txt",
-        "-v"
+        "./20230411_RPM/20230407_H23.extendedFrags_barcode.csv",
+        "-v",
+        "--separator",
+        ","
       ]
     }
   ]

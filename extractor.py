@@ -17,7 +17,7 @@ import numpy as np
 
 
 def extract_read_cnts(
-    sequence_file: pathlib.Path, barcode_file: pathlib.Path, result_dir
+    sequence_file: pathlib.Path, barcode_file: pathlib.Path, result_dir, sep=":"
 ):
     # df index == barcode, column == read count
 
@@ -27,7 +27,7 @@ def extract_read_cnts(
     tqdm.pandas()
     # Load barcode file
     result_df = pd.read_csv(
-        barcode_file, sep=":", header=None, names=["Gene", "Barcode"]
+        barcode_file, sep=sep, header=None, names=["Gene", "Barcode"]
     )
     if not result_df["Barcode"].is_unique:
         # Barcode used as a PK in the database, so duplication is not allowed
@@ -122,10 +122,10 @@ def extract_read_cnts(
 
 
 def main(*args) -> pd.DataFrame:
-    (sequence, barcode, logger, result_dir) = args[0]
+    (sequence, barcode, logger, result_dir, sep) = args[0]
 
     # start = time.time()
-    rval = extract_read_cnts(sequence, barcode, result_dir)
+    rval = extract_read_cnts(sequence, barcode, result_dir, sep)
     # end = time.time()
 
     # logger.info(f"Extraction is done. {end - start}s elapsed.")
