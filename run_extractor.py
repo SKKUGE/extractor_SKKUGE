@@ -62,6 +62,13 @@ def main():
         action="store_true",
         help="unique mutation test",
     )
+    parser.add_argument(
+        "--separator",
+        dest="sep",
+        type=str,
+        help="Separator character for the barcode file. Default is ':'.",
+        default=":",
+    )
 
     args = parser.parse_args()
 
