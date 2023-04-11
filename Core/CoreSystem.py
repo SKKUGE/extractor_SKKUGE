@@ -29,22 +29,19 @@ class Helper(object):
     @staticmethod
     def load_samples(dir: pathlib.Path) -> list:
         """
-        It reads a file and returns a list of non-empty lines that don't start with a hash
+        It reads a file and returns a list of non-empty lines that don't start with a hash mark.
 
         :param dir: the directory of the samples file
         :type dir: pathlib.Path
         :return: A list of samples.
         """
         with open(dir, "r") as file:
-            sample_list = [
-                sample
-                for sample in list(
-                    filter(None, map(str.strip, file.read().split("\n")))
-                )
-                if sample[0] != "#"
+            lines = [l.strip("\n") for l in file.readlines()]
+            sample_barcode_list = [
+                line.split(",")[:2] for line in lines if line[0] != "#"
             ]
 
-        return sample_list
+        return sample_barcode_list
 
     @staticmethod  ## defensive
     def equal_num_samples_checker(
@@ -210,7 +207,6 @@ class ExtractorRunner:
             )  # Re-create the directory
 
     def _split_into_chunks(self):
-
         ### Defensive : original fastq wc == split fastq wc
         # https://docs.python.org/3.9/library/subprocess.html#security-considerations
         sp.run(
@@ -227,18 +223,18 @@ class ExtractorRunner:
             f"The number of split files:{len(list(self.args.system_structure.seq_split_dir.glob('*')))}"
         )
 
-    def _populate_command(self):
+    def _populate_command(self, barcode):
         return [
             (
                 str(pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f),
                 str(
                     pathlib.Path.cwd()
                     / self.args.system_structure.barcode_dir
-                    / self.args.barcode
+                    / barcode
                 ),
                 self.args.logger,
                 f"{(pathlib.Path(self.args.system_structure.result_dir) / 'parquets').absolute()}",
-                self.args.sep
+                self.args.sep,
             )
             for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
             if f.endswith(".fastq")
@@ -247,7 +243,6 @@ class ExtractorRunner:
 
 def system_struct_checker(func):
     def wrapper(args: SimpleNamespace):
-
         args.multicore = os.cpu_count() if args.multicore == 0 else args.multicore
         args.logger.info("Program start")
         if os.cpu_count() < args.multicore:
@@ -270,7 +265,7 @@ def system_struct_checker(func):
 
 @system_struct_checker
 def run_pipeline(args: SimpleNamespace) -> None:
-    for sample in args.samples:
+    for sample, barcode in args.samples:
         Helper.SplitSampleInfo(sample)
 
         extractor_runner = ExtractorRunner(sample, args)
@@ -280,7 +275,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         extractor_runner._split_into_chunks()
 
         args.logger.info("Populating command...")
-        listCmd = extractor_runner._populate_command()
+        listCmd = extractor_runner._populate_command(barcode)
 
         args.logger.info("RunMulticore")
 
