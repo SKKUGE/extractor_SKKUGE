@@ -1,3 +1,5 @@
+# Adated to ClonTracer library
+
 import pathlib
 
 import dask.dataframe as dd
@@ -11,7 +13,9 @@ from multiprocessing import cpu_count
 UPSTREAM_FLANKING_SEQUENCE = "TCTTTTTACTGACTGCAGTCTGAGTCTGACAG"
 DOWNSTREAM_FLANKING_SEQUENCE = "AGCAGAGCTACGCACTCTATGCTAGCTCGA"
 
-SEARCH_PATTERN = rf"({UPSTREAM_FLANKING_SEQUENCE})(.*)({DOWNSTREAM_FLANKING_SEQUENCE})"
+SEARCH_PATTERN = (
+    rf"({UPSTREAM_FLANKING_SEQUENCE})(.{{30}})({DOWNSTREAM_FLANKING_SEQUENCE})"
+)
 
 
 def pattern_matcher(pat, seq):
@@ -24,7 +28,7 @@ def extract_barcodes(src_file: pathlib.Path, dest_dir: pathlib.Path) -> None:
 
     # 2*n + 1
     # id, seq, +, qual
-    bags = bags.filter(lambda x: re.match(rf"^(A|T|G|C|a|t|g|c)", x))
+    bags = bags.filter(lambda x: re.match(rf"^(A|T|G|C|a|t|g|c|N)", x))
     barcodes = bags.map(
         lambda x: pattern_matcher(pat=SEARCH_PATTERN, seq=x)
     ).to_dataframe(meta={0: "object"})
