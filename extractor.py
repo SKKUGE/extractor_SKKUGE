@@ -28,7 +28,7 @@ def extract_read_cnts(
     # Load barcode file
     result_df = pd.read_csv(
         barcode_file, sep=sep, header=None, names=["Gene", "Barcode"]
-    )
+    ).iloc[:, [0, 1]]   # Use only Gene and Barcode columns
     if not result_df["Barcode"].is_unique:
         # Barcode used as a PK in the database, so duplication is not allowed
         print("Barcode duplication detected!")

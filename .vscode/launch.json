@@ -17,9 +17,9 @@
         "-c",
         "100000",
         "-u",
-        "RPM",
+        "JU",
         "-p",
-        "barcode_finder",
+        "RNA_barcoding_test",
         "-v",
         "--separator",
         ","
