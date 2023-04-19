@@ -341,7 +341,7 @@ def run_extractor_mp(
             for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet")
         ]
     )
-
+    df["RPM"] = df["Read_counts"] / df["Read_counts"].sum() * 1e6
     df.drop(["ID"], axis=1).groupby(["Gene", "Barcode"]).sum().compute().to_csv(
         f"{result_dir}/{sample_name}+extraction_result.csv", index=True
     )
