@@ -335,14 +335,23 @@ def run_extractor_mp(
 
     # TODO: asynchronous merging of parquet files
     # load multiple csv files into one dask dataframe
-    df = dd.concat(
-        [
-            dd.read_parquet(f).explode("ID")
-            for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet")
-        ]
-    )
+    # TODO : Refactor this block of code
+    parquets = []
+    for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet"):
+        d_parquet = dd.read_parquet(f)
+        d_parquet["n_ids"] = d_parquet["ID"].apply(len, meta=("ID", "int64"))
+        d_parquet = d_parquet.explode("ID")
+        d_parquet["Read_counts"] = (
+            d_parquet["Read_counts"] / d_parquet["n_ids"]
+        )  # mutiplied and divided by the number of IDs
+        parquets.append(d_parquet)
+    df = dd.concat(parquets)
+
+    # DEBUG
+    df.compute().to_csv(f"{result_dir}/test.csv", index=False)
+
     df["RPM"] = df["Read_counts"] / df["Read_counts"].sum() * 1e6
-    df.drop(["ID"], axis=1).groupby(["Gene", "Barcode"]).sum().compute().to_csv(
+    df.drop(["ID"], axis=1).groupby(["Gene", "Barcode"]).max().compute().to_csv(
         f"{result_dir}/{sample_name}+extraction_result.csv", index=True
     )
 
