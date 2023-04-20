@@ -351,9 +351,13 @@ def run_extractor_mp(
     df.compute().to_csv(f"{result_dir}/test.csv", index=False)
 
     df["RPM"] = df["Read_counts"] / df["Read_counts"].sum() * 1e6
-    df.drop(["ID"], axis=1).groupby(["Gene", "Barcode"]).max().compute().to_csv(
+
+    df.drop(["ID", "n_ids"], axis=1).groupby(
+        ["Gene", "Barcode"]
+    ).sum().compute().to_csv(
         f"{result_dir}/{sample_name}+extraction_result.csv", index=True
-    )
+    )  # Fetch the original Read count from n_ids
+    # TODO: refactor this block of code
 
     if verbose_mode:
         # Create NGS_ID_classification.csv
