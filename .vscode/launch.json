@@ -17,11 +17,9 @@
         "-c",
         "100000",
         "-u",
-        "RPM",
+        "JU",
         "-p",
-        "barcode_finder",
-        "--barcode",
-        "./20230411_RPM/20230407_H23.extendedFrags_barcode.csv",
+        "RNA_barcoding_test",
         "-v",
         "--separator",
         ","

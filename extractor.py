@@ -28,7 +28,9 @@ def extract_read_cnts(
     # Load barcode file
     result_df = pd.read_csv(
         barcode_file, sep=sep, header=None, names=["Gene", "Barcode"]
-    )
+    ).iloc[
+        :, [0, 1]
+    ]  # Use only Gene and Barcode columns
     if not result_df["Barcode"].is_unique:
         # Barcode used as a PK in the database, so duplication is not allowed
         print("Barcode duplication detected!")
@@ -45,42 +47,6 @@ def extract_read_cnts(
     seqs = skbio.io.read(
         sequence_file, format="fastq", verify=True, variant="illumina1.8"
     )  # FASTQ format verification using skbio
-    # cuda_available = cuda.is_available()
-    cuda_available = False
-
-    # debug
-    # if cuda_available:
-    #     import cudf
-
-    #     # print("Nvidia GPU detected!")
-
-    #     seq_df = cudf.DataFrame(
-    #         [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
-    #         columns=["ID", "Sequence"],
-    #     )
-
-    #     for idx, row in tqdm(result_df.iterrows()):
-    #         query_result = seq_df["Sequence"].str.contains(row["Barcode_copy"])
-    #         (
-    #             result_df.loc[idx, "ID"],
-    #             result_df.loc[idx, "Sequence"],
-    #             result_df.loc[idx, "Read_counts"],
-    #         ) = (
-    #             "\n".join(
-    #                 seq_df.loc[query_result[query_result].index]["ID"]
-    #                 .to_numpy()
-    #                 .tolist()
-    #             ),
-    #             "\n".join(
-    #                 seq_df.loc[query_result[query_result].index]["Sequence"]
-    #                 .to_numpy()
-    #                 .tolist()
-    #             ),
-    #             query_result.sum(),
-    #         )  # boolean indexing for fast processing
-
-    # else:  # this command not being found can raise quite a few different errors depending on the configuration
-    #     # print("No Nvidia GPU in system!")
 
     seq_df = pd.DataFrame(
         [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
@@ -89,6 +55,9 @@ def extract_read_cnts(
     seq_detection_array = np.zeros(seq_df.shape[0], dtype=bool)
 
     for idx, row in tqdm(result_df.iterrows()):
+        # query_result format
+        #
+
         query_result = seq_df["Sequence"].str.contains(row["Barcode_copy"])
         # boolean indexing for fast processing
         result_df.at[idx, "ID"] = (
@@ -97,6 +66,10 @@ def extract_read_cnts(
         result_df.loc[idx, "Read_counts"] = (query_result.sum(),)
 
         seq_detection_array[query_result[query_result].index] = True
+
+        # TODO: Sample with replacement option
+        # Without replacement from the sequence pool
+        seq_df.drop(query_result[query_result].index, inplace=True, axis=0)
 
     del seq_df
     gc.collect()
