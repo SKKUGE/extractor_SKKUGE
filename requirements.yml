@@ -1,0 +1,23 @@
+name: extractor
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.9
+  - black
+  - pandas
+  - scikit-bio
+  - tqdm
+  - mamba
+  - rapids=22.12
+  - cudatoolkit=11.5
+  - ca-certificates
+  - certifi
+  - openssl
+  - pytorch
+  - torchvision
+  - torchaudio
+  - pytorch-cuda=11.6
+  - cudf=22.10
+prefix: extractor

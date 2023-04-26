@@ -348,7 +348,7 @@ def run_extractor_mp(
     df = dd.concat(parquets)
 
     # DEBUG
-    df.compute().to_csv(f"{result_dir}/test.csv", index=False)
+    # df.compute().to_csv(f"{result_dir}/test.csv", index=False)
 
     df["RPM"] = df["Read_counts"] / df["Read_counts"].sum() * 1e6
 
