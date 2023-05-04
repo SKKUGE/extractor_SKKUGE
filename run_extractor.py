@@ -41,12 +41,6 @@ def main():
         help="split FASTQ, indicates how many reads will be in a splitted file. file size < 1G recommendation:10000, size > 1G recommendation:100000",
     )
     parser.add_argument(
-        "--barcode",
-        type=pathlib.Path,
-        default="Barcode.txt",
-        help="Barcode file path",
-    )
-    parser.add_argument(
         "-u", "--user", dest="user_name", type=str, help="The user name with no space"
     )
     parser.add_argument(
@@ -54,7 +48,21 @@ def main():
         "--project",
         dest="project_name",
         type=str,
-        help="The project name with no space",
+        help="The project name with no space\n Barcode directries are written in the project.txt in the User directory, tab separated",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="unique mutation test",
+    )
+    parser.add_argument(
+        "--separator",
+        dest="sep",
+        type=str,
+        help="Separator character for the barcode file. Default is ':'.",
+        default=":",
     )
     parser.add_argument(
         "-i",
@@ -92,6 +100,12 @@ def main():
     logger.addHandler(stream_handler)
     # TODO: follow the system directory structure
 
+    samples_and_barcodes = Helper.load_samples(system_structure.project_samples_path)
+
+    # Add custom arguments
+    args.system_structure = system_structure
+    args.samples = samples_and_barcodes
+    args.logger = logger
     for date in d_list:
         samples = Helper.load_samples(system_structure.input_dir / str(date) / f'{args.project_name}.txt')
         
