@@ -172,3 +172,4 @@ Output/*
 *.txt~
 *.txt#
 *.zip
+nohup.out

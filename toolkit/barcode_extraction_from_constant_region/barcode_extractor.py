@@ -1,4 +1,4 @@
-# Adated to ClonTracer library
+# Adapted to ClonTracer library
 
 import pathlib
 
@@ -10,8 +10,8 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 from multiprocessing import cpu_count
 
-UPSTREAM_FLANKING_SEQUENCE = "TCTTTTTACTGACTGCAGTCTGAGTCTGACAG"
-DOWNSTREAM_FLANKING_SEQUENCE = "AGCAGAGCTACGCACTCTATGCTAGCTCGA"
+UPSTREAM_FLANKING_SEQUENCE = "AGTCTGAGTCTGACAG"
+DOWNSTREAM_FLANKING_SEQUENCE = "AGCAGAGCTACGCACT"
 
 SEARCH_PATTERN = (
     rf"({UPSTREAM_FLANKING_SEQUENCE})(.{{30}})({DOWNSTREAM_FLANKING_SEQUENCE})"
