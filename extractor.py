@@ -17,7 +17,11 @@ import numpy as np
 
 
 def extract_read_cnts(
-    sequence_file: pathlib.Path, barcode_file: pathlib.Path, result_dir, sep=":"
+    sequence_file: pathlib.Path,
+    barcode_file: pathlib.Path,
+    result_dir,
+    sep=":",
+    sample_replacement_mode=False,
 ):
     # df index == barcode, column == read count
 
@@ -31,6 +35,10 @@ def extract_read_cnts(
     ).iloc[
         :, [0, 1]
     ]  # Use only Gene and Barcode columns
+    result_df["Barcode"] = result_df[
+        "Barcode"
+    ].str.upper()  # FIXED: Subsequence should be uppercase
+
     if not result_df["Barcode"].is_unique:
         # Barcode used as a PK in the database, so duplication is not allowed
         print("Barcode duplication detected!")
@@ -69,7 +77,8 @@ def extract_read_cnts(
 
         # TODO: Sample with replacement option
         # Without replacement from the sequence pool
-        seq_df.drop(query_result[query_result].index, inplace=True, axis=0)
+        if not sample_replacement_mode:
+            seq_df.drop(query_result[query_result].index, inplace=True, axis=0)
 
     del seq_df
     gc.collect()
@@ -95,10 +104,12 @@ def extract_read_cnts(
 
 
 def main(*args) -> pd.DataFrame:
-    (sequence, barcode, logger, result_dir, sep) = args[0]
+    (sequence, barcode, logger, result_dir, sep, sample_replacement_mode) = args[0]
 
     # start = time.time()
-    rval = extract_read_cnts(sequence, barcode, result_dir, sep)
+    rval = extract_read_cnts(
+        sequence, barcode, result_dir, sep, sample_replacement_mode
+    )
     # end = time.time()
 
     # logger.info(f"Extraction is done. {end - start}s elapsed.")

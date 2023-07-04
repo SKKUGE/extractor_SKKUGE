@@ -17,10 +17,11 @@
         "-c",
         "100000",
         "-u",
-        "RPM",
+        "HDB",
         "-p",
-        "barcode_finder",
+        "TnpBPE",
         "-v",
+        "--sample-replacement",
         "--separator",
         ","
       ]

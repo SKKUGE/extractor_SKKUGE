@@ -56,6 +56,12 @@ def main():
         help="unique mutation test",
     )
     parser.add_argument(
+        "--sample-replacement",
+        dest="sample_replacement",
+        action="store_true",
+        help="Sample with replacement option; Default: sample without replacement",
+    )
+    parser.add_argument(
         "--separator",
         dest="sep",
         type=str,

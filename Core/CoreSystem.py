@@ -235,6 +235,7 @@ class ExtractorRunner:
                 self.args.logger,
                 f"{(pathlib.Path(self.args.system_structure.result_dir) / 'parquets').absolute()}",
                 self.args.sep,
+                self.args.sample_replacement,
             )
             for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
             if f.endswith(".fastq")
@@ -298,7 +299,12 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
 
 def run_extractor_mp(
-    lCmd, iCore, logger, verbose_mode: bool, result_dir: pathlib.Path, sample_name
+    lCmd,
+    iCore,
+    logger,
+    verbose_mode: bool,
+    result_dir: pathlib.Path,
+    sample_name,
 ) -> None:
     import time
     import gc
@@ -319,7 +325,7 @@ def run_extractor_mp(
     logger.info(f"Extraction is done. {end - start}s elapsed.")
 
     logger.info(f"Generating statistics...")
-
+    # BUG:
     with open(f"{result_dir}/{sample_name}+read_statstics.txt", "w") as f:
         read_stat = np.concatenate([rval for rval in result], axis=0)
         detected, total_read, detection_rate = (
