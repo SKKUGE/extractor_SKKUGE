@@ -13,10 +13,11 @@ sys.path.insert(0, os.path.dirname(os.getcwd()))
 from Core.CoreSystem import (
     SystemStructure,
     Helper,
+    ReadBarcode,
     run_pipeline,
 )
 
-
+import toolkit.FLASH_multiple_files as flash
 def main():
     parser = argparse.ArgumentParser(
         prog="extractor_SKKUGE",
@@ -63,10 +64,34 @@ def main():
         help="Separator character for the barcode file. Default is ':'.",
         default=":",
     )
+    parser.add_argument(
+        "-i",
+        "--ui",
+        dest="ui_type",
+        type=int,
+        default=1,
+        help="UI type, 0 : for argument mode, 1 : interactive mode(default)",
+    )
 
     args = parser.parse_args()
 
-    system_structure = SystemStructure(args.user_name, args.project_name)
+    # code for interactive UI design
+    if args.ui_type : 
+        args.user_name = input('Enter User name : ')
+        args.project_name = input('Enter Project name : ')
+        args.barcode = input('Enter barcode file name : ')
+        print(args.user_name, args.project_name)
+        system_structure = SystemStructure(args.user_name, args.project_name)
+        rb = ReadBarcode(args.user_name, args.project_name, args.barcode)
+        rb.UseExcel()
+                                
+    else : 
+        system_structure = SystemStructure(args.user_name, args.project_name)
+    
+    flash.USER = args.user_name
+    flash.PROJECT = args.project_name
+    flash.INPUT_FILES_PATH = system_structure.user_dir
+    d_list = flash.merge()
 
     # Prepare logger
     logger = logging.getLogger(__name__)
@@ -81,8 +106,16 @@ def main():
     args.system_structure = system_structure
     args.samples = samples_and_barcodes
     args.logger = logger
+    for date in d_list:
+        samples = Helper.load_samples(system_structure.input_dir / str(date) / f'{args.project_name}.txt')
+        
+        # Add custom arguments
+        args.system_structure = system_structure
+        args.samples = samples
+        args.date = str(date)
+        args.logger = logger
 
-    run_pipeline(SimpleNamespace(**vars(args)))
+        run_pipeline(SimpleNamespace(**vars(args)))
     logger.info("Program end")
 
 

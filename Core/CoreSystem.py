@@ -5,10 +5,10 @@ import shlex
 import os
 import pathlib
 import sys
+
 from collections import defaultdict
 from types import SimpleNamespace
 from concurrent.futures import ProcessPoolExecutor
-
 import pandas as pd
 
 
@@ -29,19 +29,22 @@ class Helper(object):
     @staticmethod
     def load_samples(dir: pathlib.Path) -> list:
         """
-        It reads a file and returns a list of non-empty lines that don't start with a hash mark.
+        It reads a file and returns a list of non-empty lines that don't start with a hash
 
         :param dir: the directory of the samples file
         :type dir: pathlib.Path
         :return: A list of samples.
         """
         with open(dir, "r") as file:
-            lines = [l.strip("\n") for l in file.readlines()]
-            sample_barcode_list = [
-                line.split(",")[:2] for line in lines if line[0] != "#"
+            sample_list = [
+                sample
+                for sample in list(
+                    filter(None, map(str.strip, file.read().split("\n")))
+                )
+                if sample[0] != "#"
             ]
 
-        return sample_barcode_list
+        return sample_list
 
     @staticmethod  ## defensive
     def equal_num_samples_checker(
@@ -97,14 +100,14 @@ class SystemStructure(object):
         self.input_sample_organizer = defaultdict(pathlib.Path)
         self.input_file_organizer = defaultdict(
             pathlib.Path
-        )  # .fastq.gz #TODO: FLASh integration? https://ccb.jhu.edu/software/FLASH/
+        )  # .fastq.gz
         # should contain absolute path to the file
         self.output_sample_organizer = defaultdict(pathlib.Path)
 
         self.user_dir = Helper.mkdir_if_not("User" + "/" + self.user_name)
         self.barcode_dir = Helper.mkdir_if_not("Barcodes")
         self.input_dir = Helper.mkdir_if_not(
-            "Input" + "/" + self.user_name + "/" + self.project_name
+            "User" + "/" + self.user_name + "/" + self.project_name + "/Input"
         )
         self.project_samples_path = pathlib.Path(
             "User" + "/" + self.user_name + "/" + f"{self.project_name}.txt"
@@ -114,40 +117,28 @@ class SystemStructure(object):
                 f.write("")
 
         self.output_dir = Helper.mkdir_if_not(
-            "Output" + "/" + self.user_name + "/" + self.project_name
+            "User" + "/" + self.user_name + "/" + self.project_name + "/Output"
         )
 
-    def mkdir_sample(self, sample_name: str):
+    def mkdir_sample(self, date, sample_name: str):
         # TODO
         self.input_sample_organizer[sample_name] = Helper.mkdir_if_not(
-            self.input_dir / sample_name
+            self.input_dir / date / sample_name
         )
         self.output_sample_organizer[sample_name] = Helper.mkdir_if_not(
-            self.output_dir / sample_name
+            self.output_dir / date / sample_name
         )
-        self.result_dir = Helper.mkdir_if_not(self.output_sample_organizer[sample_name])
-        self.parquet_dir = Helper.mkdir_if_not(self.result_dir / "parquets")
-
-        if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
-            sp.run(
-                [
-                    "rm",
-                    "-r",
-                    f"{self.result_dir / 'parquets'}",
-                ]
-            )
-            self.parquet_dir = Helper.mkdir_if_not(
-                self.result_dir / "parquets"
-            )  # Re-create the directory
+        self.result_dir = Helper.mkdir_if_not(
+            self.output_sample_organizer[sample_name] / "Result"
+        )
 
 
 class ExtractorRunner:
     def __init__(self, sample: str, args: SimpleNamespace):
-        args.python = sys.executable
-        # Find python executable if not specified
-        args.system_structure.mkdir_sample(sample)
         self.sample = sample
         self.args = args
+        self.args.python = sys.executable
+        self.args.system_structure.mkdir_sample(self.args.date, sample)
 
         for idx, file_path in enumerate(
             [
@@ -186,27 +177,8 @@ class ExtractorRunner:
             / "Split_files"
         )
 
-        if (
-            len(
-                os.listdir(
-                    f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}"
-                )
-            )
-            > 0
-        ):
-            sp.run(
-                [
-                    "rm",
-                    "-r",
-                    f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}",
-                ]
-            )
-            self.args.system_structure.seq_split_dir = Helper.mkdir_if_not(
-                self.args.system_structure.input_sample_organizer[self.sample]
-                / "Split_files"
-            )  # Re-create the directory
-
     def _split_into_chunks(self):
+
         ### Defensive : original fastq wc == split fastq wc
         # https://docs.python.org/3.9/library/subprocess.html#security-considerations
         sp.run(
@@ -223,18 +195,17 @@ class ExtractorRunner:
             f"The number of split files:{len(list(self.args.system_structure.seq_split_dir.glob('*')))}"
         )
 
-    def _populate_command(self, barcode):
+    def _populate_command(self):
+
         return [
             (
                 str(pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f),
                 str(
                     pathlib.Path.cwd()
                     / self.args.system_structure.barcode_dir
-                    / barcode
+                    / self.args.barcode
                 ),
                 self.args.logger,
-                f"{(pathlib.Path(self.args.system_structure.result_dir) / 'parquets').absolute()}",
-                self.args.sep,
             )
             for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
             if f.endswith(".fastq")
@@ -243,11 +214,12 @@ class ExtractorRunner:
 
 def system_struct_checker(func):
     def wrapper(args: SimpleNamespace):
+
         args.multicore = os.cpu_count() if args.multicore == 0 else args.multicore
         args.logger.info("Program start")
         if os.cpu_count() < args.multicore:
             args.logger.warning(
-                f"Optimal threads <= {mp.cpu_count()} : {args.multicore} is not recommended"
+                f"Optimal threads <= {os.cpu_count()} : {args.multicore} is not recommended"
             )
         for key, value in sorted(vars(args).items()):
             args.logger.info(f"Argument {key}: {value}")
@@ -265,114 +237,106 @@ def system_struct_checker(func):
 
 @system_struct_checker
 def run_pipeline(args: SimpleNamespace) -> None:
-    for sample, barcode in args.samples:
+    for sample in args.samples:
         Helper.SplitSampleInfo(sample)
 
         extractor_runner = ExtractorRunner(sample, args)
-
+        
         # Chunking
         args.logger.info("Splitting sequecnes into chunks")
         extractor_runner._split_into_chunks()
 
         args.logger.info("Populating command...")
-        listCmd = extractor_runner._populate_command(barcode)
+        listCmd = extractor_runner._populate_command()
 
         args.logger.info("RunMulticore")
-
-        # Refactor this block of code for flushing memory
-        run_extractor_mp(
-            listCmd,
-            args.multicore,
-            args.logger,
-            args.verbose,
-            args.system_structure.result_dir,
-            sample,
-        )
-        sp.run(
-            [
-                "rm",
-                "-r",
-                f"{pathlib.Path.cwd() / args.system_structure.seq_split_dir}",
-            ]
+        run_extractor_mp(listCmd, args.multicore, args.logger).to_csv(
+            f"{args.system_structure.result_dir}/{sample}+extraction_result.csv"
         )
 
 
-def run_extractor_mp(
-    lCmd, iCore, logger, verbose_mode: bool, result_dir: pathlib.Path, sample_name
-) -> None:
+def run_extractor_mp(lCmd, iCore, logger) -> pd.DataFrame:
     import time
-    import gc
-    from tqdm import tqdm
-    import numpy as np
-    import dask.dataframe as dd
     from extractor import main as extractor_main
-
+    
     for sCmd in lCmd:
         logger.info(f"Running {sCmd} command with {iCore} cores")
 
     result = []
     start = time.time()
     with ProcessPoolExecutor(max_workers=iCore) as executor:
-        for rval in list(tqdm(executor.map(extractor_main, lCmd), total=len(lCmd))):
+        for rval in executor.map(extractor_main, lCmd):
             result.append(rval)
     end = time.time()
     logger.info(f"Extraction is done. {end - start}s elapsed.")
+    logger.info(f"All extraction subprocesses completed")
+    logger.info(f"Merging extraction results...")
 
-    logger.info(f"Generating statistics...")
+    df = result.pop()
+    for d in result:
+        df["Read_counts"] = df["Read_counts"] + d["Read_counts"]
 
-    with open(f"{result_dir}/{sample_name}+read_statstics.txt", "w") as f:
-        read_stat = np.concatenate([rval for rval in result], axis=0)
-        detected, total_read, detection_rate = (
-            read_stat.sum(),
-            read_stat.shape[0],
-            read_stat.sum() / read_stat.shape[0],
-        )
-        f.write(f"Total read: {total_read}\n")
-        f.write(f"Detected read: {detected}\n")
-        f.write(f"Detection rate in the sequence pool: {detection_rate}\n")
+    return df
 
-    logger.info(f"Generating final extraction results...")
 
-    # TODO: asynchronous merging of parquet files
-    # load multiple csv files into one dask dataframe
-    # TODO : Refactor this block of code
-    parquets = []
-    for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet"):
-        d_parquet = dd.read_parquet(f)
-        d_parquet["n_ids"] = d_parquet["ID"].apply(len, meta=("ID", "int64"))
-        d_parquet = d_parquet.explode("ID")
-        d_parquet["Read_counts"] = (
-            d_parquet["Read_counts"] / d_parquet["n_ids"]
-        )  # mutiplied and divided by the number of IDs
-        parquets.append(d_parquet)
-    df = dd.concat(parquets)
+class ReadBarcode(object):
 
-    # DEBUG
-    df.compute().to_csv(f"{result_dir}/test.csv", index=False)
+    def __init__(self, user, project, barcode):
+        self.FilePath = ''
+        self.user = user
+        self.project = project
+        self.barcode = barcode
+        self.index = ''
+        self.BarcodeList = pd.DataFrame()
 
-    df["RPM"] = df["Read_counts"] / df["Read_counts"].sum() * 1e6
+    def UseExcel(self):
 
-    df.drop(["ID", "n_ids"], axis=1).groupby(
-        ["Gene", "Barcode"]
-    ).sum().compute().to_csv(
-        f"{result_dir}/{sample_name}+extraction_result.csv", index=True
-    )  # Fetch the original Read count from n_ids
-    # TODO: refactor this block of code
-
-    if verbose_mode:
-        # Create NGS_ID_classification.csv
-
-        df.drop(["Read_counts"], axis=1).dropna(subset=["ID"]).set_index(
-            "ID"
-        ).compute().to_csv(
-            f"{result_dir}/{sample_name}+multiple_detection_test_result.csv", index=True
-        )
-        # Create Barcode_multiple_detection_test.csv
-        df.groupby(["ID"])["Barcode"].count().compute().to_csv(
-            f"{result_dir}/{sample_name}+multiple_detection_test_by_id.csv"
+        #barcode library import
+        db = pd.read_excel(
+            pathlib.Path("User" + "/" + self.user + "/" + f"Barcode Database.xlsx"), engine = 'openpyxl', sheet_name="Oligo seq")
+        os.rename(
+            pathlib.Path("User/" + self.user + "/Barcode Database.xlsx"), 
+            pathlib.Path("User/" + self.user + "/" + self.project + "/" f"{self.user}_{self.project}_barcode.xlsx")
         )
 
-        # Create statistics for analysis
-        gc.collect()
+        #select filter column, barcode column
+        num=0
+        for index in db.columns :
+            print(num,index)
+            num=num+1
+        col_num = list(map(int,input('select columns to use, Last is Barcode sequence column : ').split()))
+        db = db.iloc[:, col_num]
+        col_b = db.columns[-1]
+        db.rename(columns = {col_b:'Barcode'}, inplace = True)
 
-    return
+        #barcode filtering with options
+        for option in db.columns:
+            temp = db[option]
+            temp = temp.drop_duplicates().reset_index(drop = True)
+            print(temp)
+            condition = input(f'select rows to use in <<{option}>> : ')
+            if(condition == '*'):
+                continue
+            select_temp = condition.split()
+            selection_list = []
+            for c in select_temp:
+                print(c)
+                if '~' in c:
+                    c = c.split('~')
+                    n1 = int(c[0])
+                    n2 = int(c[1])
+                    n_list = list(range(n1, n2+1))
+                    selection_list.extend(n_list)
+                else : selection_list.append(int(c))
+            options = temp[temp.index.isin(selection_list)].values
+            db = db[db[option].isin(options)]
+
+            #column rename with option_name
+            if(db.columns[0] == option):
+                db['Gene'] = db[option]
+            else :
+                db['Gene'] = db['Gene'] + "_" + db[option]
+        print(db)
+        self.BarcodeList = db[['Gene', 'Barcode']]
+        self.BarcodeList.to_csv(pathlib.Path("Barcodes") / self.barcode, sep = ':', header = None, index = False)
+        return self.BarcodeList
