@@ -10,6 +10,7 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 from multiprocessing import cpu_count
 
+# Hyperparameters
 UPSTREAM_FLANKING_SEQUENCE = "AGTCTGAGTCTGACAG"
 DOWNSTREAM_FLANKING_SEQUENCE = "AGCAGAGCTACGCACT"
 
@@ -51,8 +52,18 @@ def extract_barcodes(src_file: pathlib.Path, dest_dir: pathlib.Path) -> None:
 
 
 if __name__ == "__main__":
-    src_files = pathlib.Path("./src/").glob("*.fastq")
+    from os.path import exists
+
+    src_dir = pathlib.Path("./src/")
+    src_files = pathlib.Path(src_dir).glob("*.fastq")
     dest_dir = pathlib.Path("./dest/")
+
+    if not src_dir.exists() or not dest_dir.exists():
+        src_dir.mkdir(parents=True, exist_ok=True)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        raise FileNotFoundError(
+            'Source or destination directory has generated. Please copy-and-paste input files in "src" directory.'
+        )
 
     with ProcessPoolExecutor(max_workers=cpu_count()) as executor:
         for src_file in src_files:
