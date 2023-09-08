@@ -33,7 +33,7 @@ def extract_read_cnts(
     result_df = pd.read_csv(
         barcode_file, sep=sep, header=None, names=["Gene", "Barcode"]
     ).iloc[
-        :, [0, 1]
+        :, [0, 1]   # TODO: multiple barcodes
     ]  # Use only Gene and Barcode columns
     result_df["Barcode"] = result_df[
         "Barcode"
@@ -100,7 +100,7 @@ def extract_read_cnts(
     del result_df
     gc.collect()
 
-    return seq_detection_array
+    return seq_detection_array  # TODO: parquet을 읽으면 되는 것 아닌가?
 
 
 def main(*args) -> pd.DataFrame:

@@ -17,11 +17,11 @@
         "-c",
         "100000",
         "-u",
-        "HDB",
+        "KJS",
         "-p",
-        "TnpBPE",
+        "EYS_2nd_lib",
         "-v",
-        "--sample-replacement",
+        // "--sample-replacement",
         "--separator",
         ","
       ]
