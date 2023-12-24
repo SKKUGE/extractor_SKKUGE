@@ -7,13 +7,13 @@
 __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
+import gc
 import pathlib
 
-import pandas as pd
-from tqdm import tqdm
-import skbio
-import gc
 import numpy as np
+import pandas as pd
+import skbio
+from tqdm import tqdm
 
 
 def extract_read_cnts(
@@ -21,22 +21,18 @@ def extract_read_cnts(
 ):
     # df index == barcode, column == read count
 
-    from torch import cuda
-    from dask.dataframe import from_pandas as dask_from_pandas
-
     tqdm.pandas()
     # Load barcode file
     result_df = pd.read_csv(
         barcode_file, sep=sep, header=None, names=["Gene", "Barcode"]
-    ).iloc[
-        :, [0, 1]
-    ]  # Use only Gene and Barcode columns
+    ).iloc[:, [0, 1]]  # Use only Gene and Barcode columns
     if not result_df["Barcode"].is_unique:
         # Barcode used as a PK in the database, so duplication is not allowed
         print("Barcode duplication detected!")
         print("Remove duplicated Barcodes... only the first one will be kept.")
         result_df.drop_duplicates(subset=["Barcode"], keep="first", inplace=True)
 
+    result_df["Barcode"] = result_df["Barcode"].str.upper()
     result_df["Barcode_copy"] = result_df["Barcode"]
 
     result_df = result_df.set_index("Barcode")  # TODO: tentative design

@@ -1,15 +1,12 @@
-import logging
-import subprocess as sp
 import multiprocessing as mp
-import shlex
 import os
 import pathlib
+import shlex
+import subprocess as sp
 import sys
 from collections import defaultdict
-from types import SimpleNamespace
 from concurrent.futures import ProcessPoolExecutor
-
-import pandas as pd
+from types import SimpleNamespace
 
 
 class Helper(object):
@@ -78,9 +75,12 @@ class Helper(object):
             logger.info("The file list is correct, pass\n")
 
     @staticmethod
-    def SplitSampleInfo(sample):  # Deprecated
+    def SplitSampleInfo(sample):
         # Sample\tReference\tGroup
-        logging.info("[Deprecated] Processing sample : %s" % sample)
+        # logging.info("[Deprecated] Processing sample : %s" % sample)
+
+        # sample = sample.replace(" ", r"\ ")
+        return sample
 
 
 # > The class creates a directory structure for a user and a project
@@ -212,7 +212,7 @@ class ExtractorRunner:
         sp.run(
             shlex.split(
                 shlex.quote(
-                    f"split {self.args.system_structure.input_file_organizer[self.sample]} -l {4 * self.args.chunk_size} -d -a 6 --additional-suffix=.fastq {self.args.system_structure.seq_split_dir}/split_"
+                    f'split "{self.args.system_structure.input_file_organizer[self.sample]}" -l {4 * self.args.chunk_size} -d -a 6 --additional-suffix=.fastq {self.args.system_structure.seq_split_dir}/split_'
                 )
             ),
             shell=True,
@@ -266,7 +266,7 @@ def system_struct_checker(func):
 @system_struct_checker
 def run_pipeline(args: SimpleNamespace) -> None:
     for sample, barcode in args.samples:
-        Helper.SplitSampleInfo(sample)
+        sample = Helper.SplitSampleInfo(sample)
 
         extractor_runner = ExtractorRunner(sample, args)
 
@@ -300,11 +300,13 @@ def run_pipeline(args: SimpleNamespace) -> None:
 def run_extractor_mp(
     lCmd, iCore, logger, verbose_mode: bool, result_dir: pathlib.Path, sample_name
 ) -> None:
-    import time
     import gc
-    from tqdm import tqdm
-    import numpy as np
+    import time
+
     import dask.dataframe as dd
+    import numpy as np
+    from tqdm import tqdm
+
     from extractor import main as extractor_main
 
     for sCmd in lCmd:
@@ -318,7 +320,7 @@ def run_extractor_mp(
     end = time.time()
     logger.info(f"Extraction is done. {end - start}s elapsed.")
 
-    logger.info(f"Generating statistics...")
+    logger.info("Generating statistics...")
 
     with open(f"{result_dir}/{sample_name}+read_statstics.txt", "w") as f:
         read_stat = np.concatenate([rval for rval in result], axis=0)
@@ -331,7 +333,7 @@ def run_extractor_mp(
         f.write(f"Detected read: {detected}\n")
         f.write(f"Detection rate in the sequence pool: {detection_rate}\n")
 
-    logger.info(f"Generating final extraction results...")
+    logger.info("Generating final extraction results...")
 
     # TODO: asynchronous merging of parquet files
     # load multiple csv files into one dask dataframe
