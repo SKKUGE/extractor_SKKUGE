@@ -173,3 +173,5 @@ Output/*
 *.txt#
 *.zip
 nohup.out
+*.parquet
+*.tar.gz
