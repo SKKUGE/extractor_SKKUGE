@@ -300,7 +300,6 @@ def run_pipeline(args: SimpleNamespace) -> None:
 def run_extractor_mp(
     lCmd, iCore, logger, verbose_mode: bool, result_dir: pathlib.Path, sample_name
 ) -> None:
-    import gc
     import time
 
     import dask.dataframe as dd
@@ -341,40 +340,35 @@ def run_extractor_mp(
     parquets = []
     for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet"):
         d_parquet = dd.read_parquet(f)
-        d_parquet["n_ids"] = d_parquet["ID"].apply(len, meta=("ID", "int64"))
-        d_parquet = d_parquet.explode("ID")
-        d_parquet["Read_counts"] = (
-            d_parquet["Read_counts"] / d_parquet["n_ids"]
-        )  # mutiplied and divided by the number of IDs
+        # d_parquet["n_ids"] = d_parquet["ID"].apply(len, meta=("ID", "object"))  # BUG
+        # d_parquet = d_parquet.explode("ID")
+        # d_parquet["Read_counts"] = (
+        #     d_parquet["Read_counts"] / d_parquet["n_ids"]
+        # )  # mutiplied and divided by the number of IDs
         parquets.append(d_parquet)
     df = dd.concat(parquets)
 
-    # DEBUG
-    df.compute().to_csv(f"{result_dir}/test.csv", index=False)
-
     df["RPM"] = df["Read_counts"] / df["Read_counts"].sum() * 1e6
 
-    df.drop(["ID", "n_ids"], axis=1).groupby(
-        ["Gene", "Barcode"]
-    ).sum().compute().to_csv(
+    df.drop(["ID"], axis=1).groupby(["Gene", "Barcode"]).sum().compute().to_csv(
         f"{result_dir}/{sample_name}+extraction_result.csv", index=True
-    )  # Fetch the original Read count from n_ids
+    )
     # TODO: refactor this block of code
 
-    if verbose_mode:
-        # Create NGS_ID_classification.csv
+    # if verbose_mode:
+    #     # Create NGS_ID_classification.csv
 
-        df.drop(["Read_counts"], axis=1).dropna(subset=["ID"]).set_index(
-            "ID"
-        ).compute().to_csv(
-            f"{result_dir}/{sample_name}+multiple_detection_test_result.csv", index=True
-        )
-        # Create Barcode_multiple_detection_test.csv
-        df.groupby(["ID"])["Barcode"].count().compute().to_csv(
-            f"{result_dir}/{sample_name}+multiple_detection_test_by_id.csv"
-        )
+    #     df.drop(["Read_counts"], axis=1).dropna(subset=["ID"]).set_index(
+    #         "ID"
+    #     ).compute().to_csv(
+    #         f"{result_dir}/{sample_name}+multiple_detection_test_result.csv", index=True
+    #     )
+    #     # Create Barcode_multiple_detection_test.csv
+    #     df.groupby(["ID"])["Barcode"].count().compute().to_csv(
+    #         f"{result_dir}/{sample_name}+multiple_detection_test_by_id.csv"
+    #     )
 
-        # Create statistics for analysis
-        gc.collect()
+    #     # Create statistics for analysis
+    #     gc.collect()
 
     return
