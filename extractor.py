@@ -20,6 +20,11 @@ def extract_read_cnts(
     sequence_file: pathlib.Path, barcode_file: pathlib.Path, result_dir, sep=":"
 ):
     # df index == barcode, column == read count
+    # Positional meaning of barcode file: Name, Barcode, 1st barcode-paired substring, 2nd barcode-paired substring, ...
+
+    from torch import cuda
+    from dask.dataframe import from_pandas as dask_from_pandas
+    import swifter
 
     tqdm.pandas()
     # Load barcode file
@@ -47,8 +52,25 @@ def extract_read_cnts(
     seq_df = pd.DataFrame(
         [(seq.metadata["id"], seq._string.decode()) for seq in seqs],
         columns=["ID", "Sequence"],
-    )
-    seq_detection_array = np.zeros(seq_df.shape[0], dtype=bool)
+    )  # Sequence pool
+    seq_detection_array = np.zeros(seq_df.shape[0], dtype=bool)  # TODO: remove it?
+
+    def find_occurrences_for_barcode(x: pd.Series):
+        query_result = seq_df["Sequence"].str.contains(row["Barcode_copy"])
+        # boolean indexing for fast processing
+        result_df.at[idx, "ID"] = (
+            seq_df.loc[query_result[query_result].index]["ID"].to_numpy().tolist()
+        )
+        result_df.loc[idx, "Read_counts"] = (query_result.sum(),)
+
+        seq_detection_array[query_result[query_result].index] = True
+
+        # TODO: Sample with replacement option
+        # Without replacement from the sequence pool
+        if not sample_replacement_mode:
+            seq_df.drop(query_result[query_result].index, inplace=True, axis=0)
+
+    result_df.swifter.apply(find_occurrences_for_barcode, axis=1)
 
     for idx, row in tqdm(result_df.iterrows()):
         # query_result format
