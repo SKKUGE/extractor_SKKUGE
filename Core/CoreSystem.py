@@ -4,14 +4,19 @@ import pathlib
 import shlex
 import subprocess as sp
 import sys
-from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
 from types import SimpleNamespace
+
+import pandas as pd
+from dask.diagnostics import ProgressBar
+from icecream import ic
+
+pbar = ProgressBar()
+pbar.register()
 
 
 class Helper(object):
     @staticmethod
-    def mkdir_if_not(directory: str) -> pathlib.Path:
+    def mkdir_if_not(directory: pathlib.Path) -> pathlib.Path:
         """
         > If the directory doesn't exist, create it
 
@@ -19,28 +24,27 @@ class Helper(object):
         :type directory: str
         :return: A path object
         """
-        path = pathlib.Path(directory)
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
 
     @staticmethod
-    def load_samples(dir: pathlib.Path) -> list:
+    def load_samples(directory: pathlib.Path) -> list:
         """
         It reads a file and returns a list of non-empty lines that don't start with a hash mark.
 
-        :param dir: the directory of the samples file
-        :type dir: pathlib.Path
+        :param directory: the directory of the samples file
+        :type directory: pathlib.Path
         :return: A list of samples.
         """
-        with open(dir, "r") as file:
-            lines = [l.strip("\n") for l in file.readlines()]
+        with open(directory, "r", encoding="utf-8") as file:
+            lines = [line.strip("\n") for line in file.readlines()]
             sample_barcode_list = [
                 line.split(",")[:2] for line in lines if line[0] != "#"
             ]
 
         return sample_barcode_list
 
-    @staticmethod  ## defensive
+    @staticmethod  # defensive
     def equal_num_samples_checker(
         proj_path: pathlib.Path, loaded_samples: list, logger
     ):
@@ -57,65 +61,67 @@ class Helper(object):
 
         if len(list(proj_path.glob("*"))) != len(loaded_samples):
             logger.warning(
-                "The number of samples in the Input folder and in the User folder does not matched."
+                "The number of samples in the Input folder and in the User folder does not matched. Check the file list in the Input folder and the project list in the User folder."
             )
 
-            input_entries = [i.name for i in proj_path.glob("*")]
-            user_entries = [i for i in loaded_samples]
+            # input_entries = [i.name for i in proj_path.glob("*")]
+            # user_entries = [i for i in loaded_samples]
             logger.warning(
                 f"Input folder: {len(list(proj_path.glob('*')))}, Project list samples: {len(loaded_samples)}"
             )
-            logger.warning(
-                f"Input folder: {[i for i in input_entries if i not in user_entries]}"
-            )
-            logger.warning(
-                f"Project list samples: {[u for u in user_entries if u not in input_entries]}"
-            )
+            # logger.warning(
+            #     f"Input folder: {[i for i in input_entries if i not in user_entries]}"
+            # )
+            # logger.warning(
+            #     f"Project list samples: {[u for u in user_entries if u not in input_entries]}"
+            # )
         else:
             logger.info("The file list is correct, pass\n")
 
-    @staticmethod
-    def SplitSampleInfo(sample):
-        # Sample\tReference\tGroup
-        # logging.info("[Deprecated] Processing sample : %s" % sample)
 
-        # sample = sample.replace(" ", r"\ ")
-        return sample
-
-
-# > The class creates a directory structure for a user and a project
 class SystemStructure(object):
     def __init__(
         self,
         user_name: str,
         project_name: str,
+        base_dir: pathlib.Path = pathlib.Path.cwd() / "Data",
     ):
+        from collections import defaultdict
+        from typing import DefaultDict
+
         # https://www.notion.so/dengardengarden/s-Daily-Scrum-Reports-74d406ce961c4af78366a201c1933b66#cd5b57433eca4c6da36145d81adbbe5e
         self.user_name = user_name
         self.project_name = project_name
-        self.project_samples_path = ""
-        self.input_sample_organizer = defaultdict(pathlib.Path)
-        self.input_file_organizer = defaultdict(
+        self.base_dir = base_dir
+        self.input_sample_organizer: DefaultDict[str, pathlib.Path] = defaultdict(
             pathlib.Path
-        )  # .fastq.gz #TODO: FLASh integration? https://ccb.jhu.edu/software/FLASH/
-        # should contain absolute path to the file
-        self.output_sample_organizer = defaultdict(pathlib.Path)
+        )
+        self.input_file_organizer: DefaultDict[str, pathlib.Path] = defaultdict(
+            pathlib.Path
+        )
+        self.output_sample_organizer: DefaultDict[str, pathlib.Path] = defaultdict(
+            pathlib.Path
+        )
 
-        self.user_dir = Helper.mkdir_if_not("User" + "/" + self.user_name)
-        self.barcode_dir = Helper.mkdir_if_not("Barcodes")
+        self.user_dir = Helper.mkdir_if_not(
+            self.base_dir / f'{"User" + "/" + self.user_name}'
+        )
+        self.barcode_dir = Helper.mkdir_if_not(self.base_dir / "Barcodes")
         self.input_dir = Helper.mkdir_if_not(
-            "Input" + "/" + self.user_name + "/" + self.project_name
+            self.base_dir
+            / f'{"Input" + "/" + self.user_name + "/" + self.project_name}'
         )
         self.project_samples_path = pathlib.Path(
-            "User" + "/" + self.user_name + "/" + f"{self.project_name}.txt"
+            self.user_dir / f"{self.project_name}.txt"
         )
         if not self.project_samples_path.exists():
-            with open(self.project_samples_path, "w") as f:
-                f.write("")
+            with open(self.project_samples_path, "w", encoding="utf-8") as f:
+                f.write("# Sample,Barcode\n")
 
         self.output_dir = Helper.mkdir_if_not(
-            "Output" + "/" + self.user_name + "/" + self.project_name
-        )
+            self.base_dir
+            / f'{"Output" + "/" + self.user_name + "/" + self.project_name}'
+        )  # TODO is it needed?
 
     def mkdir_sample(self, sample_name: str, barcode_name: str):
         # TODO
@@ -139,6 +145,11 @@ class SystemStructure(object):
             self.parquet_dir = Helper.mkdir_if_not(
                 self.result_dir / "parquets"
             )  # Re-create the directory
+
+
+# TODO: FLASh integration? https://ccb.jhu.edu/software/FLASH/
+def fastp_integration():
+    pass
 
 
 class ExtractorRunner:
@@ -243,8 +254,8 @@ class ExtractorRunner:
 
 def system_struct_checker(func):
     def wrapper(args: SimpleNamespace):
+        args.logger.info("System structure check : User, Project, Input, Output")
         args.multicore = os.cpu_count() if args.multicore == 0 else args.multicore
-        args.logger.info("Program start")
         if os.cpu_count() < args.multicore:
             args.logger.warning(
                 f"Optimal threads <= {mp.cpu_count()} : {args.multicore} is not recommended"
@@ -265,110 +276,83 @@ def system_struct_checker(func):
 
 @system_struct_checker
 def run_pipeline(args: SimpleNamespace) -> None:
+    # TODO: add parquet remove option
+    from dask import bag as db
+    from dask import dataframe as dd
+    from dask import delayed
+    from dask.distributed import Client, LocalCluster
+
+    from Core.extractor import main as extractor_main
+
+    args.logger.info("Initilaizing local cluster...")
+    cluster = LocalCluster(
+        n_workers=mp.cpu_count(), threads_per_worker=1, memory_limit="2GB"
+    )  # TODO: n_workers: to mp.cpu_count()
+    client = Client(cluster)
+    ic(client)
     for sample, barcode in args.samples:
-        sample = Helper.SplitSampleInfo(sample)
+        ExtractorRunner(
+            sample, barcode, args
+        )  # TODO: refactor its usage to avoid creating an object
 
-        extractor_runner = ExtractorRunner(sample, barcode, args)
-
-        # Chunking
-        args.logger.info("Splitting sequecnes into chunks")
-        extractor_runner._split_into_chunks()
-
-        args.logger.info("Populating command...")
-        listCmd = extractor_runner._populate_command(barcode)
-
-        args.logger.info("RunMulticore")
-
-        # Refactor this block of code for flushing memory
-        run_extractor_mp(
-            listCmd,
-            args.multicore,
-            args.logger,
-            args.verbose,
-            args.system_structure.result_dir,
-            sample,
-        )
-        sp.run(
-            [
-                "rm",
-                "-r",
-                f"{pathlib.Path.cwd() / args.system_structure.seq_split_dir}",
-            ]
+        args.logger.info("Loading merged fastq file...")
+        bag = db.read_text(args.system_structure.input_file_organizer[sample])
+        sequence_ddf = bag.to_dataframe()
+        sequence_ddf = (
+            sequence_ddf.to_dask_array(lengths=True)
+            .reshape(-1, 4)
+            .to_dask_dataframe(
+                columns=["ID", "Sequence", "Separator", "Quality"],
+            )
         )
 
-
-def run_extractor_mp(
-    lCmd, iCore, logger, verbose_mode: bool, result_dir: pathlib.Path, sample_name
-) -> None:
-    import time
-
-    import dask.dataframe as dd
-    import numpy as np
-    from tqdm import tqdm
-
-    from extractor import main as extractor_main
-
-    for sCmd in lCmd:
-        logger.info(f"Running {sCmd} command with {iCore} cores")
-
-    result = []
-    start = time.time()
-    with ProcessPoolExecutor(max_workers=iCore) as executor:
-        for rval in list(tqdm(executor.map(extractor_main, lCmd), total=len(lCmd))):
-            result.append(rval)
-    end = time.time()
-    logger.info(f"Extraction is done. {end - start}s elapsed.")
-
-    logger.info("Generating statistics...")
-
-    with open(f"{result_dir}/{sample_name}+read_statstics.txt", "w") as f:
-        read_stat = np.concatenate([rval for rval in result], axis=0)
-        detected, total_read, detection_rate = (
-            read_stat.sum(),
-            read_stat.shape[0],
-            read_stat.sum() / read_stat.shape[0],
+        # Load barcode file
+        args.logger.info("Loading barcode file...")
+        barcode_df = pd.read_csv(
+            barcode,
+            sep=args.sep,
+            header=None,
+            names=["Gene", "Barcode"],
+            chunksize=args.chunk_size,
         )
-        f.write(f"Total read: {total_read}\n")
-        f.write(f"Detected read: {detected}\n")
-        f.write(f"Detection rate in the sequence pool: {detection_rate}\n")
+        futures = []
+        for i, barcode_chunk in enumerate(barcode_df):
+            args.logger.info(
+                f"Submitting extraction process...{i/(sum(1 for row in open(barcode, 'r'))/args.chunk_size)* 100}% done"
+            )
+            futures.append(
+                client.submit(
+                    extractor_main,
+                    sequence_ddf,
+                    barcode_chunk.iloc[:, [0, 1]],  # Use only Gene and Barcode columns
+                    args.logger,
+                    args.system_structure.result_dir,
+                    args.sep,
+                    chunk_number=i,
+                )
+            )
+        rvals = client.gather(futures)
+        for rval in rvals:
+            if rval == -1:
+                raise Exception(f"extractor_main has returned with {rval}")
 
-    logger.info("Generating final extraction results...")
+        # Gather results
+        args.logger.info("Merging parquet files...")
+        # TODO  : Merge parquet files
 
-    # TODO: asynchronous merging of parquet files
-    # load multiple csv files into one dask dataframe
-    # TODO : Refactor this block of code
-    parquets = []
-    for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet"):
-        d_parquet = dd.read_parquet(f)
-        # d_parquet["n_ids"] = d_parquet["ID"].apply(len, meta=("ID", "object"))  # BUG
-        # d_parquet = d_parquet.explode("ID")
-        # d_parquet["Read_counts"] = (
-        #     d_parquet["Read_counts"] / d_parquet["n_ids"]
-        # )  # mutiplied and divided by the number of IDs
-        parquets.append(d_parquet)
-    df = dd.concat(parquets)
+        all_extraction_delayed_datasts = []
+        for file in rvals:
+            all_extraction_delayed_datasts.append(
+                delayed(dd.read_parquet)(
+                    file,
+                    engine="pyarrow",
+                )
+            )
+        combined_extraction_datasets = delayed(dd.concat)(
+            all_extraction_delayed_datasts
+        )
+        combined_extraction_datasets.head().to_csv("./dask_test.csv")
 
-    df["RPM"] = df["Read_counts"] / df["Read_counts"].sum() * 1e6
+        # TODO: Post processing of full matrix
 
-    df.drop(["ID"], axis=1).groupby(["Gene", "Barcode"]).sum().compute().to_csv(
-        f"{result_dir}/{sample_name}+extraction_result.csv", index=True
-    )
-    # TODO: refactor this block of code
-
-    # if verbose_mode:
-    #     # Create NGS_ID_classification.csv
-
-    #     df.drop(["Read_counts"], axis=1).dropna(subset=["ID"]).set_index(
-    #         "ID"
-    #     ).compute().to_csv(
-    #         f"{result_dir}/{sample_name}+multiple_detection_test_result.csv", index=True
-    #     )
-    #     # Create Barcode_multiple_detection_test.csv
-    #     df.groupby(["ID"])["Barcode"].count().compute().to_csv(
-    #         f"{result_dir}/{sample_name}+multiple_detection_test_by_id.csv"
-    #     )
-
-    #     # Create statistics for analysis
-    #     gc.collect()
-
-    return
+        args.logger.info("Extraction process completed.")
