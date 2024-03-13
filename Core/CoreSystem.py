@@ -286,10 +286,14 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
     args.logger.info("Initilaizing local cluster...")
     cluster = LocalCluster(
-        n_workers=mp.cpu_count(), threads_per_worker=1, memory_limit="2GB"
+        n_workers=mp.cpu_count(),
+        threads_per_worker=1,
+        memory_limit="2GB",
+        dashboard_address=":40927",
     )  # TODO: n_workers: to mp.cpu_count()
     client = Client(cluster)
     ic(client)
+    ic(client.dashboard_link)
     for sample, barcode in args.samples:
         ExtractorRunner(
             sample, barcode, args
@@ -316,9 +320,10 @@ def run_pipeline(args: SimpleNamespace) -> None:
             chunksize=args.chunk_size,
         )
         futures = []
+
         for i, barcode_chunk in enumerate(barcode_df):
             args.logger.info(
-                f"Submitting extraction process...{i/(sum(1 for row in open(barcode, 'r'))/args.chunk_size)* 100}% done"
+                f"Submitting extraction process...{i/(sum(1 for row in open(barcode, 'r'))/args.chunk_size)* 100}%"
             )
             futures.append(
                 client.submit(
@@ -331,7 +336,9 @@ def run_pipeline(args: SimpleNamespace) -> None:
                     chunk_number=i,
                 )
             )
-        rvals = client.gather(futures)
+        args.logger.info("Gathering etraction results...")
+        with ProgressBar():
+            rvals = client.gather(futures)
         for rval in rvals:
             if rval == -1:
                 raise Exception(f"extractor_main has returned with {rval}")
@@ -349,10 +356,21 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 )
             )
         combined_extraction_datasets = delayed(dd.concat)(
-            all_extraction_delayed_datasts
+            all_extraction_delayed_datasts, axis=0
         )
-        combined_extraction_datasets.head().to_csv("./dask_test.csv")
+
+        # combined_extraction_datasets.head().compute().to_csv(
+        #     "./dask_test.csv", index=False
+        # )  # DEBUG
 
         # TODO: Post processing of full matrix
+        args.logger.info("Post processing...")
 
-        args.logger.info("Extraction process completed.")
+        # TODO : filter multiple barcode hits
+        # combined_extraction_datasets.sum(axis=1).filter
+
+        combined_extraction_datasets.drop(columns=["ID"]).sum(axis=0).compute().to_csv(
+            f"{args.system_structure.output_sample_organizer[sample] / 'read_counts.csv'}",
+            index=False,
+        )
+    args.logger.info(f"{sample}+{barcode}: Extraction process completed.")

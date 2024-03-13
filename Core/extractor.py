@@ -72,6 +72,7 @@ def extract_read_cnts(
             f"{result_dir}/parquets/{chunk_number}",
             compression="snappy",
             engine="pyarrow",
+            write_index=False,
         )
 
         return f"{result_dir}/parquets/{chunk_number}"
