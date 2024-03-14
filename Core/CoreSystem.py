@@ -6,6 +6,7 @@ import subprocess as sp
 import sys
 from types import SimpleNamespace
 
+# os.environ["MALLOC_TRIM_THRESHOLD_"] = "32768"
 import pandas as pd
 from dask import dataframe as dd
 from dask import delayed
@@ -14,9 +15,20 @@ from icecream import ic
 
 pbar = ProgressBar()
 pbar.register()
+import ctypes
 
 
-def merge_parquets(args, rvals, sample, barcode):
+def trim_memory() -> int:
+    libc = ctypes.CDLL("libc.so.6")
+    return libc.malloc_trim(0)
+
+
+def merge_parquets(
+    args,
+    rvals,
+    sample,
+    barcode,
+):
     try:
         args.logger.info("Merging parquet files...")
 
@@ -49,8 +61,8 @@ def merge_parquets(args, rvals, sample, barcode):
             single_file=True,
         )
 
-        del combined_extraction_datasets
-        
+        del all_extraction_delayed_datasts, combined_extraction_datasets
+
         return 0
     except Exception as e:
         ic(e)
@@ -336,12 +348,14 @@ def run_pipeline(args: SimpleNamespace) -> None:
         dashboard_address=":40927",
     )
     client = Client(cluster)
+    client.amm.start()
 
     ic(client)
     ic(client.dashboard_link)
 
     read_count_futures = []
     for sample, barcode in args.samples:
+        # client.run(trim_memory)
         ExtractorRunner(
             sample, barcode, args
         )  # TODO: refactor its usage to avoid creating an object
@@ -356,6 +370,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
         )
+
+        # TODO: add general sequence statistics
 
         # Load barcode file
         barcode_row_length = sum(1 for row in open(barcode, "r"))
@@ -383,7 +399,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
                     chunk_number=i,
                 )
             )
-
+        del bag, sequence_ddf
         # Gather results
         args.logger.info("Gathering extraction results...")
         with ProgressBar():
@@ -405,6 +421,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 barcode,
             )
         )
+
     # Run futures asynchronously
     pool = as_completed(read_count_futures, with_results=True)
 
