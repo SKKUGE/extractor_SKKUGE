@@ -1,4 +1,3 @@
-import asyncio
 import multiprocessing as mp
 import os
 import pathlib
@@ -254,7 +253,7 @@ class ExtractorRunner:
 
 
 def system_struct_checker(func):
-    async def wrapper(args: SimpleNamespace):
+    def wrapper(args: SimpleNamespace):
 
         args.logger.info("System structure check : User, Project, Input, Output")
         args.multicore = os.cpu_count() if args.multicore == 0 else args.multicore
@@ -270,121 +269,129 @@ def system_struct_checker(func):
             args.system_structure.input_dir, args.samples, args.logger
         )
 
-        return asyncio.get_event_loop().run_until_complete(func(args))
+        return func(args)
 
     return wrapper
 
 
 @system_struct_checker
-async def run_pipeline(args: SimpleNamespace) -> None:
+def run_pipeline(args: SimpleNamespace) -> None:
     # TODO: add parquet remove option
     from dask import bag as db
     from dask import dataframe as dd
     from dask import delayed
-    from dask.distributed import Client, LocalCluster
+    from dask.distributed import Client, LocalCluster, as_completed
 
     from Core.extractor import main as extractor_main
 
     args.logger.info("Initilaizing local cluster...")
 
-    async with LocalCluster(
+    cluster = LocalCluster(
         processes=True,
-        n_workers=int(0.9 * mp.cpu_count()),
+        n_workers=mp.cpu_count(),
         threads_per_worker=1,
         memory_limit="2GB",
         dashboard_address=":40927",
-        asynchronous=True,
-    ) as cluster, Client(cluster) as client:
-        ic(client)
-        ic(client.dashboard_link)
+    )
+    client = Client(cluster)
 
-        for sample, barcode in args.samples:
-            ExtractorRunner(
-                sample, barcode, args
-            )  # TODO: refactor its usage to avoid creating an object
+    ic(client)
+    ic(client.dashboard_link)
 
-            args.logger.info("Loading merged fastq file...")
-            bag = db.read_text(args.system_structure.input_file_organizer[sample])
-            sequence_ddf = bag.to_dataframe()
-            sequence_ddf = (
-                sequence_ddf.to_dask_array(lengths=True)
-                .reshape(-1, 4)
-                .to_dask_dataframe(
-                    columns=["ID", "Sequence", "Separator", "Quality"],
+    read_count_futures = []
+    for sample, barcode in args.samples:
+        ExtractorRunner(
+            sample, barcode, args
+        )  # TODO: refactor its usage to avoid creating an object
+
+        args.logger.info("Loading merged fastq file...")
+        bag = db.read_text(args.system_structure.input_file_organizer[sample])
+        sequence_ddf = bag.to_dataframe()
+        sequence_ddf = (
+            sequence_ddf.to_dask_array(lengths=True)
+            .reshape(-1, 4)
+            .to_dask_dataframe(
+                columns=["ID", "Sequence", "Separator", "Quality"],
+            )
+        )
+
+        # Load barcode file
+        barcode_row_length = sum(1 for row in open(barcode, "r"))
+        chunk_size = barcode_row_length // mp.cpu_count()
+        args.logger.info("Loading barcode file...")
+        barcode_df = pd.read_csv(
+            barcode,
+            sep=args.sep,
+            header=None,
+            names=["Gene", "Barcode"],
+            chunksize=chunk_size,
+        )
+
+        args.logger.info("Submitting extraction process...")
+        futures = []
+        for i, barcode_chunk in enumerate(barcode_df):
+            futures.append(
+                client.submit(
+                    extractor_main,
+                    sequence_ddf,
+                    barcode_chunk.iloc[:, [0, 1]],  # Use only Gene and Barcode columns
+                    args.logger,
+                    args.system_structure.result_dir,
+                    args.sep,
+                    chunk_number=i,
                 )
             )
+        args.logger.info("Gathering extraction results...")
+        with ProgressBar():
+            rvals = client.gather(futures)
+        for rval in rvals:
+            try:
+                if rval == -1:
+                    raise Exception(f"extractor_main has returned with {rval}")
+            except ValueError:
+                continue
+                # args.logger.info("Barcode extraction completed")
 
-            # Load barcode file
-            barcode_row_length = sum(1 for row in open(barcode, "r"))
-            chunk_size = barcode_row_length // mp.cpu_count()
-            args.logger.info("Loading barcode file...")
-            barcode_df = pd.read_csv(
-                barcode,
-                sep=args.sep,
-                header=None,
-                names=["Gene", "Barcode"],
-                chunksize=chunk_size,
-            )
+        # Gather results
+        # TODO  : Merge parquet files
+        args.logger.info("Merging parquet files...")
 
-            args.logger.info("Submitting extraction process...")
-            futures = []
-            for i, barcode_chunk in enumerate(barcode_df):
-                futures.append(
-                    client.submit(
-                        extractor_main,
-                        sequence_ddf,
-                        barcode_chunk.iloc[
-                            :, [0, 1]
-                        ],  # Use only Gene and Barcode columns
-                        args.logger,
-                        args.system_structure.result_dir,
-                        args.sep,
-                        chunk_number=i,
-                    )
+        # # OPTION 1: extractor_main returns parquet file path
+        all_extraction_delayed_datasts = []
+        for file in rvals:
+            all_extraction_delayed_datasts.append(
+                delayed(dd.read_parquet)(
+                    file,
+                    engine="pyarrow",
                 )
-            args.logger.info("Gathering extraction results...")
-            with ProgressBar():
-                rvals = client.gather(futures)
-            for rval in rvals:
-                try:
-                    if rval == -1:
-                        raise Exception(f"extractor_main has returned with {rval}")
-                except ValueError:
-                    continue
-                    # args.logger.info("Barcode extraction completed")
-
-            # Gather results
-            # TODO  : Merge parquet files
-            args.logger.info("Merging parquet files...")
-
-            # # OPTION 1: extractor_main returns parquet file path
-            all_extraction_delayed_datasts = []
-            for file in rvals:
-                all_extraction_delayed_datasts.append(
-                    delayed(dd.read_parquet)(
-                        file,
-                        engine="pyarrow",
-                    )
-                )
-            combined_extraction_datasets = (
-                delayed(dd.concat)(
-                    all_extraction_delayed_datasts,
-                    axis=0,
-                )
-                .drop(columns=["ID"])
-                .sum(axis=0)
             )
-
-            combined_extraction_datasets.visualize(
-                filename=f"{args.system_structure.result_dir}/read_counts.png"
+        combined_extraction_datasets = (
+            delayed(dd.concat)(
+                all_extraction_delayed_datasts,
+                axis=0,
             )
+            .drop(columns=["ID"])
+            .sum(axis=0)
+        )
 
-            result = await client.submit(combined_extraction_datasets.compute)
+        combined_extraction_datasets.visualize(
+            filename=f"{args.system_structure.result_dir}/read_counts.png"
+        )
 
-            result.to_csv(
-                f"{args.system_structure.output_sample_organizer[sample]}/'read_counts.csv'",
-                index=True,
-                single_file=True,
-                compute=True,
-            )
-            args.logger.info(f"{sample}+{barcode}: Extraction process completed.")
+        read_count_futures.append(
+            client.submit(combined_extraction_datasets.compute)
+        )  # TODO: doing this job asynchronously
+
+        args.logger.info(f"{sample}+{barcode}: Extraction future generated.")
+
+    # After the loop
+    pool = as_completed(read_count_futures, with_results=True)
+    for future, result in pool:
+
+        result.to_csv(
+            f"{args.system_structure.output_sample_organizer[sample]}/'read_counts.csv'",
+            index=True,
+            single_file=True,
+            compute=True,
+        )
+        ic(future) # DEBUG
