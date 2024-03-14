@@ -58,14 +58,14 @@ def main():
         help="Separator character for the barcode file. Default is ':'.",
         default=":",
     )
-    parser.add_argument(
-        "-c",
-        "--chunk_size",
-        dest="chunk_size",
-        type=int,
-        help="barcode file chunk size",
-        default=1,
-    )
+    # parser.add_argument(
+    #     "-c",
+    #     "--chunk_size",
+    #     dest="chunk_size",
+    #     type=int,
+    #     help="barcode file chunk size",
+    #     default=1,
+    # )
 
     args = parser.parse_args()
 
@@ -87,4 +87,8 @@ def main():
 
 
 if __name__ == "__main__":
+    import time  #
+
+    start_time = time.time()
     main()
+    print("--- %s seconds ---" % (time.time() - start_time))

@@ -8,25 +8,26 @@ __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
 
+import pathlib
+
 import dask.dataframe as dd
 import pandas as pd
 from icecream import ic
 
+# def load_test():
+#     import time  # debug
 
-def load_test():
-    import time  # debug
+#     if chunk_number is not None:
+#         ic(chunk_number)
 
-    if chunk_number is not None:
-        ic(chunk_number)
-
-    start_time = time.time()
-    cnt = 0
-    while True:
-        cnt += 1
-        ic(f"{chunk_number}:{cnt}")
-        # time.sleep(0.1)
-        if time.time() - start_time >= 5:
-            break
+#     start_time = time.time()
+#     cnt = 0
+#     while True:
+#         cnt += 1
+#         ic(f"{chunk_number}:{cnt}")
+#         # time.sleep(0.1)
+#         if time.time() - start_time >= 5:
+#             break
 
 
 def extract_read_cnts(
@@ -58,24 +59,32 @@ def extract_read_cnts(
         for gene, barcode in barcode_df.values:
             sequence_frame[gene] = sequence_frame["Sequence"].str.contains(
                 barcode, regex=True
-            )
+            )  # Vector operation, no more optimization needed
 
         # Drop heavy columns
         sequence_frame = sequence_frame.drop(
             columns=["Sequence", "Quality", "Separator"],
         )
-
-        # TODO: Sample with replacement option
         # ic(sequence_frame)
         # ic(result_dir)
+        logger.info("Post processing...")
+        sequence_frame = sequence_frame[
+            sequence_frame.sum(axis=1, numeric_only=True) < 2
+        ]  # Remove ambiguous sequences
+
+        # OPTION 1 : Save as parquet
+        pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)
+        sequence_frame.visualize(filename=f"{result_dir}/visualize/{chunk_number}.svg")
         sequence_frame.to_parquet(
             f"{result_dir}/parquets/{chunk_number}",
             compression="snappy",
             engine="pyarrow",
             write_index=False,
+            compute=True,
         )
 
         return f"{result_dir}/parquets/{chunk_number}"
+
     except Exception as e:
         ic(e)
         logger.error(e)
@@ -89,9 +98,10 @@ def main(sequence, barcode, logger, result_dir, sep, chunk_number):
     )  # return 0 upon successful completion
 
     if rval == -1:
+        ic(rval)
         logger.error("Barcode extraction failed")
         return rval
 
     logger.info("Barcode extraction completed")
     logger.info("Merging parquet files...")
-    return rval  # parquet path
+    return rval  # OPTION 1: parquet path
