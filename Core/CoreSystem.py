@@ -7,11 +7,55 @@ import sys
 from types import SimpleNamespace
 
 import pandas as pd
+from dask import dataframe as dd
+from dask import delayed
 from dask.diagnostics import ProgressBar
 from icecream import ic
 
 pbar = ProgressBar()
 pbar.register()
+
+
+def merge_parquets(args, rvals, sample, barcode):
+    try:
+        args.logger.info("Merging parquet files...")
+
+        all_extraction_delayed_datasts = []
+        for file in rvals:
+            all_extraction_delayed_datasts.append(
+                delayed(dd.read_parquet)(
+                    file,
+                    engine="pyarrow",
+                )
+            )
+        combined_extraction_datasets = (
+            delayed(dd.concat)(
+                all_extraction_delayed_datasts,
+                axis=0,
+            )
+            .drop(columns=["ID"])
+            .sum(axis=0)
+        )
+
+        combined_extraction_datasets.visualize(
+            filename=f"{args.system_structure.result_dir}/read_counts.png"
+        )
+
+        args.logger.info(f"{sample}+{barcode}: Extraction future generated.")
+
+        combined_extraction_datasets.compute().to_csv(
+            f"{args.system_structure.result_dir}/read_counts.csv",
+            index=True,
+            single_file=True,
+        )
+
+        del combined_extraction_datasets
+        
+        return 0
+    except Exception as e:
+        ic(e)
+        args.logger.error(e)
+        return -1
 
 
 class Helper(object):
@@ -278,8 +322,6 @@ def system_struct_checker(func):
 def run_pipeline(args: SimpleNamespace) -> None:
     # TODO: add parquet remove option
     from dask import bag as db
-    from dask import dataframe as dd
-    from dask import delayed
     from dask.distributed import Client, LocalCluster, as_completed
 
     from Core.extractor import main as extractor_main
@@ -341,6 +383,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
                     chunk_number=i,
                 )
             )
+
+        # Gather results
         args.logger.info("Gathering extraction results...")
         with ProgressBar():
             rvals = client.gather(futures)
@@ -352,46 +396,21 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 continue
                 # args.logger.info("Barcode extraction completed")
 
-        # Gather results
-        # TODO  : Merge parquet files
-        args.logger.info("Merging parquet files...")
-
-        # # OPTION 1: extractor_main returns parquet file path
-        all_extraction_delayed_datasts = []
-        for file in rvals:
-            all_extraction_delayed_datasts.append(
-                delayed(dd.read_parquet)(
-                    file,
-                    engine="pyarrow",
-                )
-            )
-        combined_extraction_datasets = (
-            delayed(dd.concat)(
-                all_extraction_delayed_datasts,
-                axis=0,
-            )
-            .drop(columns=["ID"])
-            .sum(axis=0)
-        )
-
-        combined_extraction_datasets.visualize(
-            filename=f"{args.system_structure.result_dir}/read_counts.png"
-        )
-
         read_count_futures.append(
-            client.submit(combined_extraction_datasets.compute)
-        )  # TODO: doing this job asynchronously
-
-        args.logger.info(f"{sample}+{barcode}: Extraction future generated.")
-
-    # After the loop
-    pool = as_completed(read_count_futures, with_results=True)
-    for future, result in pool:
-
-        result.to_csv(
-            f"{args.system_structure.output_sample_organizer[sample]}/'read_counts.csv'",
-            index=True,
-            single_file=True,
-            compute=True,
+            client.submit(
+                merge_parquets,
+                args,
+                rvals,
+                sample,
+                barcode,
+            )
         )
-        ic(future) # DEBUG
+    # Run futures asynchronously
+    pool = as_completed(read_count_futures, with_results=True)
+
+    if sum([result for future, result in pool]) == 0:
+        args.logger.info("All extraction process completed")
+    else:
+        args.logger.error("Some extraction process failed")
+        raise Exception("Some extraction process failed")
+    client.close()
