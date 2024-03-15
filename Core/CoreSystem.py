@@ -6,7 +6,7 @@ import subprocess as sp
 import sys
 from types import SimpleNamespace
 
-# os.environ["MALLOC_TRIM_THRESHOLD_"] = "32768"
+os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
 import pandas as pd
 from dask import dataframe as dd
 from dask import delayed
@@ -62,8 +62,8 @@ def merge_parquets(
         )
 
         del all_extraction_delayed_datasts, combined_extraction_datasets
-
         return 0
+
     except Exception as e:
         ic(e)
         args.logger.error(e)
@@ -334,7 +334,7 @@ def system_struct_checker(func):
 def run_pipeline(args: SimpleNamespace) -> None:
     # TODO: add parquet remove option
     from dask import bag as db
-    from dask.distributed import Client, LocalCluster, as_completed
+    from dask.distributed import Client, LocalCluster, fire_and_forget
 
     from Core.extractor import main as extractor_main
 
@@ -344,7 +344,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         processes=True,
         n_workers=mp.cpu_count(),
         threads_per_worker=1,
-        memory_limit="2GB",
+        memory_limit="4GB",
         dashboard_address=":40927",
     )
     client = Client(cluster)
@@ -375,7 +375,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
         # Load barcode file
         barcode_row_length = sum(1 for row in open(barcode, "r"))
-        chunk_size = barcode_row_length // mp.cpu_count()
+        chunk_size = barcode_row_length // (mp.cpu_count() / 2)
         args.logger.info("Loading barcode file...")
         barcode_df = pd.read_csv(
             barcode,
@@ -412,7 +412,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 continue
                 # args.logger.info("Barcode extraction completed")
 
-        read_count_futures.append(
+        fire_and_forget(
             client.submit(
                 merge_parquets,
                 args,
@@ -421,13 +421,22 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 barcode,
             )
         )
+        # read_count_futures.append(
+        #     client.submit(
+        #         merge_parquets,
+        #         args,
+        #         rvals,
+        #         sample,
+        #         barcode,
+        #     )
+        # )
 
     # Run futures asynchronously
-    pool = as_completed(read_count_futures, with_results=True)
+    # as_completed(read_count_futures, with_results=True)
 
-    if sum([result for future, result in pool]) == 0:
-        args.logger.info("All extraction process completed")
-    else:
-        args.logger.error("Some extraction process failed")
-        raise Exception("Some extraction process failed")
+    # if sum([result for future, result in pool]) == 0:
+    #     args.logger.info("All extraction process completed")
+    # else:
+    #     args.logger.error("Some extraction process failed")
+    #     raise Exception("Some extraction process failed")
     client.close()
