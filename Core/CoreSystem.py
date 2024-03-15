@@ -1,7 +1,6 @@
 import multiprocessing as mp
 import os
 import pathlib
-import shlex
 import subprocess as sp
 import sys
 from types import SimpleNamespace
@@ -12,10 +11,12 @@ from dask import dataframe as dd
 from dask import delayed
 from dask.diagnostics import ProgressBar
 from icecream import ic
+from tqdm import tqdm
 
 pbar = ProgressBar()
 pbar.register()
 import ctypes
+import gc
 
 
 def trim_memory() -> int:
@@ -62,6 +63,7 @@ def merge_parquets(
         )
 
         del all_extraction_delayed_datasts, combined_extraction_datasets
+
         return 0
 
     except Exception as e:
@@ -273,40 +275,6 @@ class ExtractorRunner:
                 / "Split_files"
             )  # Re-create the directory
 
-    def _split_into_chunks(self):
-        ### Defensive : original fastq wc == split fastq wc
-        # https://docs.python.org/3.9/library/subprocess.html#security-considerations
-        sp.run(
-            shlex.split(
-                shlex.quote(
-                    f'split "{self.args.system_structure.input_file_organizer[self.sample]}" -l {4 * self.args.chunk_size} -d -a 6 --additional-suffix=.fastq {self.args.system_structure.seq_split_dir}/split_'
-                )
-            ),
-            shell=True,
-            check=True,
-        )
-
-        self.args.logger.info(
-            f"The number of split files:{len(list(self.args.system_structure.seq_split_dir.glob('*')))}"
-        )
-
-    def _populate_command(self, barcode):
-        return [
-            (
-                str(pathlib.Path.cwd() / self.args.system_structure.seq_split_dir / f),
-                str(
-                    pathlib.Path.cwd()
-                    / self.args.system_structure.barcode_dir
-                    / barcode
-                ),
-                self.args.logger,
-                f"{(pathlib.Path(self.args.system_structure.result_dir) / 'parquets').absolute()}",
-                self.args.sep,
-            )
-            for f in sorted(os.listdir(self.args.system_structure.seq_split_dir))
-            if f.endswith(".fastq")
-        ]
-
 
 def system_struct_checker(func):
     def wrapper(args: SimpleNamespace):
@@ -336,7 +304,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
     from dask import bag as db
     from dask.distributed import Client, LocalCluster, fire_and_forget
 
-    from Core.extractor import main as extractor_main
+    from Core.extractor import extractor_main as extractor_main
 
     args.logger.info("Initilaizing local cluster...")
 
@@ -344,7 +312,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         processes=True,
         n_workers=mp.cpu_count(),
         threads_per_worker=1,
-        memory_limit="4GB",
+        memory_limit="2GB",
         dashboard_address=":40927",
     )
     client = Client(cluster)
@@ -353,9 +321,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
     ic(client)
     ic(client.dashboard_link)
 
-    read_count_futures = []
-    for sample, barcode in args.samples:
-        # client.run(trim_memory)
+    for sample, barcode in tqdm(args.samples):
         ExtractorRunner(
             sample, barcode, args
         )  # TODO: refactor its usage to avoid creating an object
@@ -369,8 +335,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
             .to_dask_dataframe(
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
-        )
-
+        ).repartition(partition_size="100MB")
+        sequence_ddf = sequence_ddf.persist()
         # TODO: add general sequence statistics
 
         # Load barcode file
@@ -412,31 +378,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 continue
                 # args.logger.info("Barcode extraction completed")
 
-        fire_and_forget(
-            client.submit(
-                merge_parquets,
-                args,
-                rvals,
-                sample,
-                barcode,
-            )
-        )
-        # read_count_futures.append(
-        #     client.submit(
-        #         merge_parquets,
-        #         args,
-        #         rvals,
-        #         sample,
-        #         barcode,
-        #     )
-        # )
+        fire_and_forget(client.submit(merge_parquets, args, rvals, sample, barcode))
+        client.run(gc.collect)
+        client.run(trim_memory)
 
-    # Run futures asynchronously
-    # as_completed(read_count_futures, with_results=True)
-
-    # if sum([result for future, result in pool]) == 0:
-    #     args.logger.info("All extraction process completed")
-    # else:
-    #     args.logger.error("Some extraction process failed")
-    #     raise Exception("Some extraction process failed")
     client.close()

@@ -82,7 +82,7 @@ def extract_read_cnts(
             write_index=False,
             compute=True,
         )
-
+        del sequence_frame
         return f"{result_dir}/parquets/{chunk_number}"
 
     except Exception as e:
@@ -91,7 +91,7 @@ def extract_read_cnts(
         return -1
 
 
-def main(sequence, barcode, logger, result_dir, sep, chunk_number):
+def extractor_main(sequence, barcode, logger, result_dir, sep, chunk_number):
 
     rval = extract_read_cnts(
         sequence, barcode, result_dir, sep, logger, chunk_number=chunk_number
