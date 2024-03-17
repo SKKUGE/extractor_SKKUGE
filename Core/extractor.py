@@ -9,6 +9,7 @@ __editor__ = "poowooho3@g.skku.edu"
 
 
 import pathlib
+import traceback
 
 import dask.dataframe as dd
 import pandas as pd
@@ -44,37 +45,41 @@ def extract_read_cnts(
 
         if not barcode_df["Gene"].is_unique or not barcode_df["Barcode"].is_unique:
             # Barcode used as a PK in the database, so duplication is not allowed
-            logger.warning(
-                "Barcode duplication detected! Check your program run design"
+            ic(
+                f"Barcode duplication detected! Check your program run design {chunk_number}"
             )
-            logger.warning(
-                "Remove duplicated Barcodes... only the first one will be kept."
+            ic(
+                f"Remove duplicated Barcodes... only the first one will be kept. {chunk_number}"
             )
             barcode_df.drop_duplicates(subset=["Barcode"], keep="first", inplace=True)
 
         barcode_df["Barcode"] = barcode_df["Barcode"].str.upper()
 
-        logger.info("Barcode extraction initiated...")
+        ic(f"Barcode extraction initiated...{chunk_number}")
 
         for gene, barcode in barcode_df.values:
+            # ic(gene, barcode) # DEBUG
             sequence_frame[gene] = sequence_frame["Sequence"].str.contains(
                 barcode, regex=True
-            )  # Vector operation, no more optimization needed
-
+            )
+        # sequence_frame.compute()
         # Drop heavy columns
         sequence_frame = sequence_frame.drop(
             columns=["Sequence", "Quality", "Separator"],
         )
+        # sequence_frame.compute()  # DEBUG
         # ic(sequence_frame)
         # ic(result_dir)
-        logger.info("Post processing...")
+        ic(f"Post processing... {chunk_number}")
         sequence_frame = sequence_frame[
             sequence_frame.sum(axis=1, numeric_only=True) < 2
         ]  # Remove ambiguous sequences
 
         # OPTION 1 : Save as parquet
         pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)
-        sequence_frame.visualize(filename=f"{result_dir}/visualize/{chunk_number}.svg")
+        sequence_frame.visualize(
+            filename=f"{result_dir}/visualize/{chunk_number}.svg"
+        )  # BUG
         sequence_frame.to_parquet(
             f"{result_dir}/parquets/{chunk_number}",
             compression="snappy",
@@ -87,6 +92,7 @@ def extract_read_cnts(
 
     except Exception as e:
         ic(e)
+        ic(traceback.format_exc())
         logger.error(e)
         return -1
 

@@ -3,10 +3,14 @@ import os
 import pathlib
 import subprocess as sp
 import sys
+import traceback
 from types import SimpleNamespace
 
 os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
+import dask
 import pandas as pd
+
+dask.config.set({"dataframe.query-planning": False})
 from dask import dataframe as dd
 from dask import delayed
 from dask.diagnostics import ProgressBar
@@ -16,7 +20,6 @@ from tqdm import tqdm
 pbar = ProgressBar()
 pbar.register()
 import ctypes
-import gc
 
 
 def trim_memory() -> int:
@@ -68,6 +71,7 @@ def merge_parquets(
 
     except Exception as e:
         ic(e)
+        ic(traceback.format_exc())
         args.logger.error(e)
         return -1
 
@@ -302,7 +306,7 @@ def system_struct_checker(func):
 def run_pipeline(args: SimpleNamespace) -> None:
     # TODO: add parquet remove option
     from dask import bag as db
-    from dask.distributed import Client, LocalCluster, fire_and_forget
+    from dask.distributed import Client, LocalCluster, fire_and_forget, wait
 
     from Core.extractor import extractor_main as extractor_main
 
@@ -310,7 +314,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
     cluster = LocalCluster(
         processes=True,
-        n_workers=mp.cpu_count(),
+        n_workers=mp.cpu_count(),  # DEBUG
         threads_per_worker=1,
         memory_limit="2GB",
         dashboard_address=":40927",
@@ -321,6 +325,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
     ic(client)
     ic(client.dashboard_link)
 
+    output_futures = []
     for sample, barcode in tqdm(args.samples):
         ExtractorRunner(
             sample, barcode, args
@@ -336,12 +341,14 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
         ).repartition(partition_size="100MB")
+
         sequence_ddf = sequence_ddf.persist()
         # TODO: add general sequence statistics
 
         # Load barcode file
         barcode_row_length = sum(1 for row in open(barcode, "r"))
         chunk_size = barcode_row_length // (mp.cpu_count() / 2)
+        # chunk_size = args.chunk_size
         args.logger.info("Loading barcode file...")
         barcode_df = pd.read_csv(
             barcode,
@@ -350,7 +357,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
             names=["Gene", "Barcode"],
             chunksize=chunk_size,
         )
-
+        # dl = [d for d in barcode_df]  # DEBUG
         args.logger.info("Submitting extraction process...")
         futures = []
         for i, barcode_chunk in enumerate(barcode_df):
@@ -358,7 +365,9 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 client.submit(
                     extractor_main,
                     sequence_ddf,
-                    barcode_chunk.iloc[:, [0, 1]],  # Use only Gene and Barcode columns
+                    barcode_chunk.iloc[
+                        :, [0, 1]
+                    ].dropna(),  # Use only Gene and Barcode columns
                     args.logger,
                     args.system_structure.result_dir,
                     args.sep,
@@ -368,18 +377,21 @@ def run_pipeline(args: SimpleNamespace) -> None:
         del bag, sequence_ddf
         # Gather results
         args.logger.info("Gathering extraction results...")
-        with ProgressBar():
-            rvals = client.gather(futures)
+
+        rvals = client.gather(futures)
         for rval in rvals:
             try:
                 if rval == -1:
+                    ic(traceback.format_exc())
                     raise Exception(f"extractor_main has returned with {rval}")
             except ValueError:
                 continue
                 # args.logger.info("Barcode extraction completed")
-
-        fire_and_forget(client.submit(merge_parquets, args, rvals, sample, barcode))
-        client.run(gc.collect)
         client.run(trim_memory)
+        # client.run(gc.collect)
+        merge_future = client.submit(merge_parquets, args, rvals, sample, barcode)
+        output_futures.append(merge_future)
+        fire_and_forget(merge_future)
+    # BUG: result csv not generated
 
-    client.close()
+    wait(output_futures)
