@@ -70,10 +70,6 @@ def extract_read_cnts(
         # sequence_frame.compute()  # DEBUG
         # ic(sequence_frame)
         # ic(result_dir)
-        ic(f"Post processing... {chunk_number}")
-        sequence_frame = sequence_frame[
-            sequence_frame.sum(axis=1, numeric_only=True) < 2
-        ]  # Remove ambiguous sequences
 
         # OPTION 1 : Save as parquet
         pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)
@@ -84,7 +80,8 @@ def extract_read_cnts(
             f"{result_dir}/parquets/{chunk_number}",
             compression="snappy",
             engine="pyarrow",
-            write_index=False,
+            write_index=True,
+            write_metadata_file=True,
             compute=True,
         )
         del sequence_frame

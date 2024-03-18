@@ -11,15 +11,15 @@ import dask
 import pandas as pd
 
 dask.config.set({"dataframe.query-planning": False})
+import ctypes
+
+from dask import bag as db
 from dask import dataframe as dd
 from dask import delayed
 from dask.diagnostics import ProgressBar
+from dask.distributed import Client, LocalCluster, fire_and_forget, wait
 from icecream import ic
 from tqdm import tqdm
-
-pbar = ProgressBar()
-pbar.register()
-import ctypes
 
 
 def trim_memory() -> int:
@@ -42,23 +42,23 @@ def merge_parquets(
                 delayed(dd.read_parquet)(
                     file,
                     engine="pyarrow",
+                    calculate_divisions=True,
                 )
             )
-        combined_extraction_datasets = (
-            delayed(dd.concat)(
-                all_extraction_delayed_datasts,
-                axis=0,
-            )
-            .drop(columns=["ID"])
-            .sum(axis=0)
-        )
-
+        combined_extraction_datasets = delayed(dd.concat)(
+            all_extraction_delayed_datasts, axis=1, interleave_partitions=True
+        ).drop(columns=["ID"])
+        # d = combined_extraction_datasets.compute() # DEBUG
+        ic("Remove ambiguous reads...")
+        combined_extraction_datasets = combined_extraction_datasets[
+            combined_extraction_datasets.sum(axis=1, numeric_only=True) <= 2
+        ]  # Remove ambiguous sequences
+        combined_extraction_datasets = combined_extraction_datasets.sum(axis=0)
         combined_extraction_datasets.visualize(
             filename=f"{args.system_structure.result_dir}/read_counts.png"
         )
 
-        args.logger.info(f"{sample}+{barcode}: Extraction future generated.")
-
+        ic(f"{sample}+{barcode}: Extraction future generated.")
         combined_extraction_datasets.compute().to_csv(
             f"{args.system_structure.result_dir}/read_counts.csv",
             index=True,
@@ -67,6 +67,7 @@ def merge_parquets(
 
         del all_extraction_delayed_datasts, combined_extraction_datasets
 
+        ic(f"{sample}+{barcode}: Final read count table was generated.")
         return 0
 
     except Exception as e:
@@ -306,8 +307,6 @@ def system_struct_checker(func):
 @system_struct_checker
 def run_pipeline(args: SimpleNamespace) -> None:
     # TODO: add parquet remove option
-    from dask import bag as db
-    from dask.distributed import Client, LocalCluster, fire_and_forget, wait
 
     from Core.extractor import extractor_main as extractor_main
 
@@ -316,8 +315,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
     cluster = LocalCluster(
         processes=True,
         n_workers=mp.cpu_count(),  # DEBUG
-        threads_per_worker=1,
-        memory_limit="2GB",
+        memory_limit="4GB",
         dashboard_address=":40927",
     )
     client = Client(cluster)
@@ -341,16 +339,13 @@ def run_pipeline(args: SimpleNamespace) -> None:
             .to_dask_dataframe(
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
-        ).repartition(partition_size="100MB")
-
-        sequence_ddf = client.persist(sequence_ddf)  # BUG
-
-        # TODO: add general sequence statistics
+        ).repartition(partition_size="1GB")
+        # sequence_ddf = client.persist(sequence_ddf)  # BUG
+        # wait(sequence_ddf)
 
         # Load barcode file
         barcode_row_length = sum(1 for row in open(barcode, "r"))
-        chunk_size = barcode_row_length // (mp.cpu_count() / 2)
-        # chunk_size = args.chunk_size
+        chunk_size = barcode_row_length // int(mp.cpu_count() * 0.5)
         args.logger.info("Loading barcode file...")
         barcode_df = pd.read_csv(
             barcode,
@@ -359,7 +354,6 @@ def run_pipeline(args: SimpleNamespace) -> None:
             names=["Gene", "Barcode"],
             chunksize=chunk_size,
         )
-        # dl = [d for d in barcode_df]  # DEBUG
         args.logger.info("Submitting extraction process...")
         futures = []
         for i, barcode_chunk in enumerate(barcode_df):
@@ -376,10 +370,10 @@ def run_pipeline(args: SimpleNamespace) -> None:
                     chunk_number=i,
                 )
             )
-        del bag, sequence_ddf
         # Gather results
-        args.logger.info("Gathering extraction results...")
-
+        ic("Gathering extraction results...")
+        with ProgressBar():
+            wait(futures)
         rvals = client.gather(futures)
         for rval in rvals:
             try:
@@ -387,13 +381,16 @@ def run_pipeline(args: SimpleNamespace) -> None:
                     ic(traceback.format_exc())
                     raise Exception(f"extractor_main has returned with {rval}")
             except ValueError:
+                ic("Parquet generation completed")
                 continue
-                # args.logger.info("Barcode extraction completed")
         client.run(trim_memory)
 
         merge_future = client.submit(merge_parquets, args, rvals, sample, barcode)
         output_futures.append(merge_future)
         fire_and_forget(merge_future)
+        del bag, sequence_ddf
     # BUG: result csv not generated
 
-    wait(output_futures)
+    ic("All merging jobs fired. Waiting for the final result...")
+    with ProgressBar():
+        wait(output_futures)
