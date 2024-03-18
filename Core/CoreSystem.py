@@ -44,15 +44,17 @@ def merge_parquets(
                     engine="pyarrow",
                 )
             )
-        combined_extraction_datasets = (
-            delayed(dd.concat)(
-                all_extraction_delayed_datasts,
-                axis=0,
-            )
-            .drop(columns=["ID"])
-            .sum(axis=0)
-        )
-
+        combined_extraction_datasets = delayed(dd.concat)(
+            all_extraction_delayed_datasts,
+            axis=0,
+            join="outer",
+            sort=False,
+        ).drop(columns=["ID"])
+        ic("Remove ambiguous reads...")
+        combined_extraction_datasets = combined_extraction_datasets[
+            combined_extraction_datasets.sum(axis=1, numeric_only=True) < 2
+        ]  # Remove ambiguous sequences
+        combined_extraction_datasets = combined_extraction_datasets.sum(axis=0)
         combined_extraction_datasets.visualize(
             filename=f"{args.system_structure.result_dir}/read_counts.png"
         )
@@ -316,8 +318,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
     cluster = LocalCluster(
         processes=True,
         n_workers=mp.cpu_count(),  # DEBUG
-        threads_per_worker=1,
-        memory_limit="2GB",
+        memory_limit="3GB",
         dashboard_address=":40927",
     )
     client = Client(cluster)
@@ -344,6 +345,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ).repartition(partition_size="100MB")
 
         sequence_ddf = client.persist(sequence_ddf)  # BUG
+        wait(sequence_ddf)
 
         # TODO: add general sequence statistics
 
@@ -378,7 +380,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
             )
         del bag, sequence_ddf
         # Gather results
-        args.logger.info("Gathering extraction results...")
+        ic("Gathering extraction results...")
 
         rvals = client.gather(futures)
         for rval in rvals:
@@ -387,8 +389,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
                     ic(traceback.format_exc())
                     raise Exception(f"extractor_main has returned with {rval}")
             except ValueError:
+                ic("Barcode extraction completed")
                 continue
-                # args.logger.info("Barcode extraction completed")
         client.run(trim_memory)
 
         merge_future = client.submit(merge_parquets, args, rvals, sample, barcode)
