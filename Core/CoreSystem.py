@@ -342,7 +342,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
             )
         ).repartition(partition_size="100MB")
 
-        sequence_ddf = sequence_ddf.persist()
+        sequence_ddf = client.persist(sequence_ddf)  # BUG
+
         # TODO: add general sequence statistics
 
         # Load barcode file
