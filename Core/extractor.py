@@ -70,7 +70,7 @@ def extract_read_cnts(
         # sequence_frame.compute()  # DEBUG
         # ic(sequence_frame)
         # ic(result_dir)
-    
+
         # OPTION 1 : Save as parquet
         pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)
         sequence_frame.visualize(
@@ -80,7 +80,8 @@ def extract_read_cnts(
             f"{result_dir}/parquets/{chunk_number}",
             compression="snappy",
             engine="pyarrow",
-            write_index=False,
+            write_index=True,
+            write_metadata_file=True,
             compute=True,
         )
         del sequence_frame
