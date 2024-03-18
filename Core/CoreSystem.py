@@ -111,7 +111,8 @@ class Helper(object):
         proj_path: pathlib.Path, loaded_samples: list, logger
     ):
         """
-        > This function checks if the number of samples in the Input folder and in the User folder
+        > This function checks if the number of samples in the Input folder \
+            and in the User folder
         matches
 
         :param proj_path: pathlib.Path, loaded_samples: list, logger
@@ -389,7 +390,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 continue
                 # args.logger.info("Barcode extraction completed")
         client.run(trim_memory)
-        # client.run(gc.collect)
+
         merge_future = client.submit(merge_parquets, args, rvals, sample, barcode)
         output_futures.append(merge_future)
         fire_and_forget(merge_future)
