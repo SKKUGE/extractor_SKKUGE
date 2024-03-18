@@ -67,6 +67,7 @@ def merge_parquets(
 
         del all_extraction_delayed_datasts, combined_extraction_datasets
 
+        ic(f"{sample}+{barcode}: Final read count table was generated.")
         return 0
 
     except Exception as e:
@@ -338,7 +339,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
             .to_dask_dataframe(
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
-        ).repartition(npartitions=2)
+        ).repartition(partition_size="1GB")
         # sequence_ddf = client.persist(sequence_ddf)  # BUG
         # wait(sequence_ddf)
 
