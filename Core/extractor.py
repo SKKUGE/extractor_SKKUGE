@@ -61,10 +61,11 @@ def extract_read_cnts(
             sequence_frame[gene] = sequence_frame["Sequence"].str.contains(
                 barcode, regex=True
             )
+            sequence_frame = sequence_frame.persist()
         # sequence_frame.compute()
         # Drop heavy columns
         sequence_frame = sequence_frame.drop(
-            columns=["Sequence", "Quality"],
+            columns=["Sequence"],
         )
         # sequence_frame.compute()  # DEBUG
         # ic(sequence_frame)

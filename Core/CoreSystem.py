@@ -46,7 +46,7 @@ def merge_parquets(
                 )
             )
         combined_extraction_datasets = delayed(dd.concat)(
-            all_extraction_delayed_datasts, axis=1, interleave_partitions=True
+            all_extraction_delayed_datasts, axis=1
         ).drop(columns=["ID"])
         # d = combined_extraction_datasets.compute() # DEBUG
         ic("Remove ambiguous reads...")
@@ -314,9 +314,9 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
     cluster = LocalCluster(
         processes=True,
-        n_workers=mp.cpu_count() - 1,  # DEBUG
+        n_workers=mp.cpu_count(),  # DEBUG
         threads_per_worker=1,
-        memory_limit="4GB",
+        memory_limit="2GB",
         dashboard_address=":40928",
     )
     client = Client(cluster)
@@ -332,9 +332,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         )  # TODO: refactor its usage to avoid creating an object
 
         args.logger.info("Loading merged fastq file...")
-        bag = db.read_text(
-            args.system_structure.input_file_organizer[sample], blocksize="100MB"
-        )
+        bag = db.read_text(args.system_structure.input_file_organizer[sample])
         sequence_ddf = bag.to_dataframe()
         sequence_ddf = (
             sequence_ddf.to_dask_array(lengths=True)
@@ -343,7 +341,9 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
         )
-        sequence_ddf = sequence_ddf.drop(columns=["Separator"])
+        sequence_ddf = sequence_ddf.drop(columns=["Separator", "Quality"]).repartition(
+            "100MB"
+        )  # drop quality sequence
 
         ic("Save NGS reads as parquets...")
         sequence_ddf.to_parquet(
@@ -362,13 +362,18 @@ def run_pipeline(args: SimpleNamespace) -> None:
         )
         # Load barcode file
         ic("Loading barcode file...")
-
+        barcode_row_length = sum(1 for row in open(barcode, "r"))
+        chunk_size = (
+            barcode_row_length // (mp.cpu_count() * 4)
+            if (barcode_row_length // (mp.cpu_count() * 4)) >= 1
+            else barcode_row_length
+        )
         barcode_df = pd.read_csv(
             barcode,
             sep=args.sep,
             header=None,
             names=["Gene", "Barcode"],
-            chunksize=64,
+            chunksize=chunk_size,
         )
         ic("Submitting extraction process...")
         futures = []
@@ -399,12 +404,13 @@ def run_pipeline(args: SimpleNamespace) -> None:
             except ValueError:
                 ic("Parquet generation completed")
                 continue
-        client.run(trim_memory)
+        # client.run(trim_memory)
 
         merge_future = client.submit(merge_parquets, args, rvals, sample, barcode)
         output_futures.append(merge_future)
         fire_and_forget(merge_future)
         del bag, sequence_ddf
+        # client.run(trim_memory)
     # BUG: result csv not generated
 
     ic("All merging jobs fired. Waiting for the final result...")
