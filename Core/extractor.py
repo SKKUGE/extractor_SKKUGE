@@ -8,7 +8,6 @@ __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
 
-import pathlib
 import traceback
 
 import dask.dataframe as dd
@@ -65,7 +64,7 @@ def extract_read_cnts(
         # sequence_frame.compute()
         # Drop heavy columns
         sequence_frame = sequence_frame.drop(
-            columns=["Sequence", "Quality", "Separator"],
+            columns=["Sequence", "Quality"],
         )
         # sequence_frame.compute()  # DEBUG
         # ic(sequence_frame)

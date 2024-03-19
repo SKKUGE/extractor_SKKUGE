@@ -314,7 +314,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
     cluster = LocalCluster(
         processes=True,
-        n_workers=int(mp.cpu_count() - 4),  # DEBUG
+        n_workers=mp.cpu_count() - 1,  # DEBUG
         threads_per_worker=1,
         memory_limit="4GB",
         dashboard_address=":40928",
@@ -343,28 +343,34 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
         )
-        # .repartition(partition_size="100MB")
+        sequence_ddf = sequence_ddf.drop(columns=["Separator"])
 
-        # sequence_ddf = client.persist(sequence_ddf)  # BUG
-        # wait(sequence_ddf)
+        ic("Save NGS reads as parquets...")
+        sequence_ddf.to_parquet(
+            f"{args.system_structure.seq_split_dir}",
+            engine="pyarrow",
+            write_index=True,
+            write_metadata_file=True,
+            compute=True,
+        )
+        ic("Parquet generation completed, load parquets")
 
+        sequence_ddf = dd.read_parquet(
+            f"{args.system_structure.seq_split_dir}",
+            engine="pyarrow",
+            calculate_divisions=True,
+        )
         # Load barcode file
-        # barcode_row_length = sum(1 for row in open(barcode, "r"))
-        # chunk_size = (
-        #     barcode_row_length // int(mp.cpu_count() * 0.8)
-        #     if barcode_row_length // int(mp.cpu_count() * 0.8) > 0
-        #     else barcode_row_length
-        # )
-        chunk_size = 64
-        args.logger.info("Loading barcode file...")
+        ic("Loading barcode file...")
+
         barcode_df = pd.read_csv(
             barcode,
             sep=args.sep,
             header=None,
             names=["Gene", "Barcode"],
-            chunksize=chunk_size,
+            chunksize=64,
         )
-        args.logger.info("Submitting extraction process...")
+        ic("Submitting extraction process...")
         futures = []
         for i, barcode_chunk in enumerate(barcode_df):
             futures.append(

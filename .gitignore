@@ -175,3 +175,4 @@ Output/*
 *.parquet
 *.gz
 *.out
+*_metadata
