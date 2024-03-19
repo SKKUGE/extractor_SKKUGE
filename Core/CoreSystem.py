@@ -349,12 +349,13 @@ def run_pipeline(args: SimpleNamespace) -> None:
         # wait(sequence_ddf)
 
         # Load barcode file
-        barcode_row_length = sum(1 for row in open(barcode, "r"))
-        chunk_size = (
-            barcode_row_length // int(mp.cpu_count() * 0.8)
-            if barcode_row_length // int(mp.cpu_count() * 0.8) > 0
-            else barcode_row_length
-        )
+        # barcode_row_length = sum(1 for row in open(barcode, "r"))
+        # chunk_size = (
+        #     barcode_row_length // int(mp.cpu_count() * 0.8)
+        #     if barcode_row_length // int(mp.cpu_count() * 0.8) > 0
+        #     else barcode_row_length
+        # )
+        chunk_size = 64
         args.logger.info("Loading barcode file...")
         barcode_df = pd.read_csv(
             barcode,
