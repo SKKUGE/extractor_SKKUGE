@@ -72,10 +72,10 @@ def extract_read_cnts(
         # ic(result_dir)
 
         # OPTION 1 : Save as parquet
-        pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)
-        sequence_frame.visualize(
-            filename=f"{result_dir}/visualize/{chunk_number}.svg"
-        )  # BUG
+        # pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)
+        # sequence_frame.visualize(
+        #     filename=f"{result_dir}/visualize/{chunk_number}.svg"
+        # )  # BUG
         sequence_frame.to_parquet(
             f"{result_dir}/parquets/{chunk_number}",
             compression="snappy",

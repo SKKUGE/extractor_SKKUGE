@@ -314,9 +314,10 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
     cluster = LocalCluster(
         processes=True,
-        n_workers=mp.cpu_count(),  # DEBUG
-        memory_limit="720GB",
-        dashboard_address=":40927",
+        n_workers=int(mp.cpu_count() - 4),  # DEBUG
+        threads_per_worker=1,
+        memory_limit="4GB",
+        dashboard_address=":40928",
     )
     client = Client(cluster)
     client.amm.start()
@@ -332,7 +333,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
         args.logger.info("Loading merged fastq file...")
         bag = db.read_text(
-            args.system_structure.input_file_organizer[sample], blocksize="1GB"
+            args.system_structure.input_file_organizer[sample], blocksize="100MB"
         )
         sequence_ddf = bag.to_dataframe()
         sequence_ddf = (
@@ -342,13 +343,18 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
         )
-        # .repartition(partition_size="1GB")
+        # .repartition(partition_size="100MB")
+
         # sequence_ddf = client.persist(sequence_ddf)  # BUG
         # wait(sequence_ddf)
 
         # Load barcode file
         barcode_row_length = sum(1 for row in open(barcode, "r"))
-        chunk_size = barcode_row_length // int(mp.cpu_count() * 0.5)
+        chunk_size = (
+            barcode_row_length // int(mp.cpu_count() * 0.8)
+            if barcode_row_length // int(mp.cpu_count() * 0.8) > 0
+            else barcode_row_length
+        )
         args.logger.info("Loading barcode file...")
         barcode_df = pd.read_csv(
             barcode,
