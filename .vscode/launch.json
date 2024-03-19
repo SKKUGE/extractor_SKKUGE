@@ -12,8 +12,8 @@
       "console": "integratedTerminal",
       "justMyCode": true,
       "args": [
-        "-t",
-        "16",
+        // "-t",
+        // "16",
         "-u",
         "JU",
         "-p",

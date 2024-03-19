@@ -315,7 +315,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
     cluster = LocalCluster(
         processes=True,
         n_workers=mp.cpu_count(),  # DEBUG
-        memory_limit="4GB",
+        memory_limit="720GB",
         dashboard_address=":40927",
     )
     client = Client(cluster)
@@ -331,7 +331,9 @@ def run_pipeline(args: SimpleNamespace) -> None:
         )  # TODO: refactor its usage to avoid creating an object
 
         args.logger.info("Loading merged fastq file...")
-        bag = db.read_text(args.system_structure.input_file_organizer[sample])
+        bag = db.read_text(
+            args.system_structure.input_file_organizer[sample], blocksize="1GB"
+        )
         sequence_ddf = bag.to_dataframe()
         sequence_ddf = (
             sequence_ddf.to_dask_array(lengths=True)
@@ -339,7 +341,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
             .to_dask_dataframe(
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
-        ).repartition(partition_size="1GB")
+        )
+        # .repartition(partition_size="1GB")
         # sequence_ddf = client.persist(sequence_ddf)  # BUG
         # wait(sequence_ddf)
 
