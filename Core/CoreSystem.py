@@ -58,10 +58,10 @@ def merge_parquets(
             all_extraction_delayed_datasts.append(delayed_fragmented_parquets)
 
         combined_extraction_datasets = binary_tree_merge(all_extraction_delayed_datasts)
-        combined_extraction_datasets.visualize(
-            filename=f"{args.system_structure.result_dir}/merge_full_matrix.png"
-        )
-        combined_extraction_datasets = combined_extraction_datasets.persist()
+        # combined_extraction_datasets.visualize(
+        #     filename=f"{args.system_structure.result_dir}/merge_full_matrix.png"
+        # )
+        # combined_extraction_datasets = combined_extraction_datasets.persist()
 
         ic("Remove ambiguous reads...")
         combined_extraction_datasets = combined_extraction_datasets[
@@ -438,5 +438,4 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
     ic("All merging jobs fired. Waiting for the final result...")
     # BUG: result csv not generated
-    with ProgressBar():
-        wait(output_futures)
+    wait(output_futures)

@@ -63,7 +63,7 @@ def extract_read_cnts(
                 barcode, regex=True
             )
 
-            if i % (2**1) == 0:  # DEBUG
+            if i % (2**3) == 0:  # DEBUG
                 # ic(i)
                 sequence_frame = sequence_frame.persist()
 
