@@ -63,10 +63,9 @@ def extract_read_cnts(
                 barcode, regex=True
             )
 
-            if i % (2**4) == 0:  # DEBUG
+            if i % (2**8) == 0:  # DEBUG
                 # ic(i)
                 sequence_frame = sequence_frame.persist()
-        # sequence_frame = sequence_frame.persist()
 
         # Drop heavy columns
         sequence_frame = sequence_frame.drop(

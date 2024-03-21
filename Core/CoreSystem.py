@@ -23,6 +23,7 @@ from dask import dataframe as dd
 from dask.diagnostics import ProgressBar
 from dask.distributed import Client, LocalCluster, wait
 from icecream import ic
+from tqdm import tqdm
 
 
 def trim_memory() -> int:
@@ -333,14 +334,17 @@ def run_pipeline(args: SimpleNamespace) -> None:
     ic(client.dashboard_link)
 
     output_futures = []
-    for sample_i, (sample, barcode) in enumerate(args.samples):
+    for sample, barcode in tqdm(args.samples):
         ExtractorRunner(
             sample, barcode, args
         )  # TODO: refactor its usage to avoid creating an object
 
         ic("Loading merged fastq file...")
-        bag = db.read_text(args.system_structure.input_file_organizer[sample])
+        bag = db.read_text(
+            args.system_structure.input_file_organizer[sample], blocksize="64MiB"
+        )
         sequence_ddf = bag.to_dataframe()
+
         sequence_ddf = (
             sequence_ddf.to_dask_array(lengths=True)
             .reshape(-1, 4)
@@ -349,7 +353,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
             )
         )
         sequence_ddf = sequence_ddf.drop(columns=["Separator", "Quality"]).repartition(
-            "100MB"
+            "128MiB"
         )  # drop quality sequence
 
         ic("Save NGS reads as parquets...")
@@ -420,9 +424,9 @@ def run_pipeline(args: SimpleNamespace) -> None:
         # del bag, sequence_ddf
         # client.run(trim_memory)
 
-        ic(
-            f"Extraction process completed and merging job fired.{100*(sample_i+1)}/{len(args.samples)}%"
-        )
+        # ic(
+        #     f"Extraction process completed and merging job fired.{100*(sample_i+1)}/{len(args.samples)}%"
+        # )
 
     ic("All merging jobs fired. Waiting for the final result...")
     # BUG: result csv not generated
