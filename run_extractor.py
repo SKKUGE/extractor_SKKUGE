@@ -3,7 +3,6 @@ import logging
 import os
 import sys
 from types import SimpleNamespace
-
 from Core.CoreSystem import (
     Helper,
     SystemStructure,

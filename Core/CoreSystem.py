@@ -1,25 +1,28 @@
-import multiprocessing as mp
 import os
 import pathlib
 import subprocess as sp
 import sys
 import traceback
+from functools import reduce
 from types import SimpleNamespace
 
-os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
-import dask
-import pandas as pd
+from psutil import cpu_count
 
-dask.config.set({"dataframe.query-planning": False})
+N_PHYSICAL_CORES = cpu_count(logical=False)
+
+os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
+import pandas as pd
+from dask import config as dcf
+from dask import delayed
+
+dcf.set({"dataframe.query-planning": False})
 import ctypes
 
 from dask import bag as db
 from dask import dataframe as dd
-from dask import delayed
 from dask.diagnostics import ProgressBar
-from dask.distributed import Client, LocalCluster, fire_and_forget, wait
+from dask.distributed import Client, LocalCluster, wait
 from icecream import ic
-from tqdm import tqdm
 
 
 def trim_memory() -> int:
@@ -34,28 +37,34 @@ def merge_parquets(
     barcode,
 ):
     try:
-        args.logger.info("Merging parquet files...")
+        ic("Merging parquet files...")
 
         all_extraction_delayed_datasts = []
         for file in rvals:
-            all_extraction_delayed_datasts.append(
-                delayed(dd.read_parquet)(
-                    file,
-                    engine="pyarrow",
-                    calculate_divisions=True,
-                )
-            )
-        combined_extraction_datasets = delayed(dd.concat)(
-            all_extraction_delayed_datasts, axis=1
-        ).drop(columns=["ID"])
-        # d = combined_extraction_datasets.compute() # DEBUG
+            delayed_fragmented_parquets = delayed(dd.read_parquet)(
+                path=file,
+                engine="pyarrow",
+                calculate_divisions=True,
+            ).set_index("ID")
+            all_extraction_delayed_datasts.append(delayed_fragmented_parquets)
+
+        combined_extraction_datasets = delayed(reduce)(
+            lambda x, y: x.merge(y, how="left", left_index=True, right_index=True),
+            all_extraction_delayed_datasts,
+        )
+        combined_extraction_datasets.visualize(
+            filename=f"{args.system_structure.result_dir}/merge_full_matrix.png"
+        )
+        combined_extraction_datasets = combined_extraction_datasets.persist()
+
         ic("Remove ambiguous reads...")
         combined_extraction_datasets = combined_extraction_datasets[
             combined_extraction_datasets.sum(axis=1, numeric_only=True) <= 2
         ]  # Remove ambiguous sequences
+        ic("Calculating read counts...")
         combined_extraction_datasets = combined_extraction_datasets.sum(axis=0)
         combined_extraction_datasets.visualize(
-            filename=f"{args.system_structure.result_dir}/read_counts.png"
+            filename=f"{args.system_structure.result_dir}/post_processing.png"
         )
 
         ic(f"{sample}+{barcode}: Extraction future generated.")
@@ -65,9 +74,7 @@ def merge_parquets(
             single_file=True,
         )
 
-        del all_extraction_delayed_datasts, combined_extraction_datasets
-
-        ic(f"{sample}+{barcode}: Final read count table was generated.")
+        # ic(f"{sample}+{barcode}: Final read count table was generated.")
         return 0
 
     except Exception as e:
@@ -234,7 +241,7 @@ class ExtractorRunner:
         ):
             # Load input file from input sample folder (only one file)
             if file_path.suffix in [".fastq", ".fq", ".fastq.gz", ".fq.gz"]:
-                args.logger.info(f"File name : {file_path.stem}")
+                ic(f"File name : {file_path.stem}")
                 self.args.system_structure.input_file_organizer[self.sample] = (
                     pathlib.Path.cwd() / file_path
                 )
@@ -285,16 +292,16 @@ class ExtractorRunner:
 def system_struct_checker(func):
     def wrapper(args: SimpleNamespace):
 
-        args.logger.info("System structure check : User, Project, Input, Output")
+        ic("System structure check : User, Project, Input, Output")
         args.multicore = os.cpu_count() if args.multicore == 0 else args.multicore
         if os.cpu_count() < args.multicore:
             args.logger.warning(
-                f"Optimal threads <= {mp.cpu_count()} : {args.multicore} is not recommended"
+                f"Optimal threads <= {N_PHYSICAL_CORES} : {args.multicore} is not recommended"
             )
         for key, value in sorted(vars(args).items()):
-            args.logger.info(f"Argument {key}: {value}")
+            ic(f"Argument {key}: {value}")
 
-        args.logger.info("File num check: input folder and project list")
+        ic("File num check: input folder and project list")
         Helper.equal_num_samples_checker(
             args.system_structure.input_dir, args.samples, args.logger
         )
@@ -310,13 +317,13 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
     from Core.extractor import extractor_main as extractor_main
 
-    args.logger.info("Initilaizing local cluster...")
+    ic("Initilaizing local cluster...")
 
     cluster = LocalCluster(
         processes=True,
-        n_workers=mp.cpu_count(),  # DEBUG
-        threads_per_worker=1,
-        memory_limit="2GB",
+        n_workers=N_PHYSICAL_CORES,  # DEBUG
+        threads_per_worker=2,
+        memory_limit="4GiB",
         dashboard_address=":40928",
     )
     client = Client(cluster)
@@ -326,12 +333,12 @@ def run_pipeline(args: SimpleNamespace) -> None:
     ic(client.dashboard_link)
 
     output_futures = []
-    for sample, barcode in tqdm(args.samples):
+    for sample_i, (sample, barcode) in enumerate(args.samples):
         ExtractorRunner(
             sample, barcode, args
         )  # TODO: refactor its usage to avoid creating an object
 
-        args.logger.info("Loading merged fastq file...")
+        ic("Loading merged fastq file...")
         bag = db.read_text(args.system_structure.input_file_organizer[sample])
         sequence_ddf = bag.to_dataframe()
         sequence_ddf = (
@@ -364,10 +371,11 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ic("Loading barcode file...")
         barcode_row_length = sum(1 for row in open(barcode, "r"))
         chunk_size = (
-            barcode_row_length // (mp.cpu_count() * 4)
-            if (barcode_row_length // (mp.cpu_count() * 4)) >= 1
+            barcode_row_length // (N_PHYSICAL_CORES)
+            if (barcode_row_length // (N_PHYSICAL_CORES)) >= 1
             else barcode_row_length
         )
+        # chunk_size = 64
         barcode_df = pd.read_csv(
             barcode,
             sep=args.sep,
@@ -404,15 +412,19 @@ def run_pipeline(args: SimpleNamespace) -> None:
             except ValueError:
                 ic("Parquet generation completed")
                 continue
+
+        output_futures.append(
+            client.submit(merge_parquets, args, rvals, sample, barcode)
+        )
+        # fire_and_forget(merge_future)
+        # del bag, sequence_ddf
         # client.run(trim_memory)
 
-        merge_future = client.submit(merge_parquets, args, rvals, sample, barcode)
-        output_futures.append(merge_future)
-        fire_and_forget(merge_future)
-        del bag, sequence_ddf
-        # client.run(trim_memory)
-    # BUG: result csv not generated
+        ic(
+            f"Extraction process completed and merging job fired.{100*(sample_i+1)}/{len(args.samples)}%"
+        )
 
     ic("All merging jobs fired. Waiting for the final result...")
+    # BUG: result csv not generated
     with ProgressBar():
         wait(output_futures)

@@ -8,6 +8,7 @@ __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
 
+import pathlib
 import traceback
 
 import dask.dataframe as dd
@@ -56,26 +57,25 @@ def extract_read_cnts(
 
         ic(f"Barcode extraction initiated...{chunk_number}")
 
-        for gene, barcode in barcode_df.values:
+        for i, (gene, barcode) in barcode_df.iterrows():
             # ic(gene, barcode) # DEBUG
             sequence_frame[gene] = sequence_frame["Sequence"].str.contains(
                 barcode, regex=True
             )
-            sequence_frame = sequence_frame.persist()
-        # sequence_frame.compute()
+
+            if i % (2**4) == 0:  # DEBUG
+                # ic(i)
+                sequence_frame = sequence_frame.persist()
+        # sequence_frame = sequence_frame.persist()
+
         # Drop heavy columns
         sequence_frame = sequence_frame.drop(
             columns=["Sequence"],
         )
-        # sequence_frame.compute()  # DEBUG
-        # ic(sequence_frame)
-        # ic(result_dir)
 
         # OPTION 1 : Save as parquet
-        # pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)
-        # sequence_frame.visualize(
-        #     filename=f"{result_dir}/visualize/{chunk_number}.svg"
-        # )  # BUG
+        pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)
+        sequence_frame.visualize(filename=f"{result_dir}/visualize/{chunk_number}.png")
         sequence_frame.to_parquet(
             f"{result_dir}/parquets/{chunk_number}",
             compression="snappy",
@@ -84,7 +84,7 @@ def extract_read_cnts(
             write_metadata_file=True,
             compute=True,
         )
-        del sequence_frame
+        # del sequence_frame
         return f"{result_dir}/parquets/{chunk_number}"
 
     except Exception as e:
