@@ -37,7 +37,7 @@ def binary_tree_merge(dataframes):
     mid = len(dataframes) // 2
     left = binary_tree_merge(dataframes[:mid])
     right = binary_tree_merge(dataframes[mid:])
-    return left.merge(right, how="left", left_index=True, right_index=True)
+    return left.merge(right, how="left", left_index=True, right_index=True).persist()
 
 
 def merge_parquets(
@@ -80,7 +80,8 @@ def finalize(
         ic("Remove ambiguous reads...")
         combined_extraction_datasets = combined_extraction_datasets[
             combined_extraction_datasets.sum(axis=1, numeric_only=True) <= 2
-        ]  # Remove ambiguous sequences
+        ].persist()  # Remove ambiguous sequences
+
         ic("Calculating read counts...")
         combined_extraction_datasets = combined_extraction_datasets.sum(axis=0)
         combined_extraction_datasets.visualize(
@@ -346,7 +347,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         processes=True,
         n_workers=N_PHYSICAL_CORES,  # DEBUG
         threads_per_worker=2,
-        memory_limit="4GiB",
+        memory_limit="8GiB",
         dashboard_address=":40928",
     )
     client = Client(cluster)
@@ -438,9 +439,6 @@ def run_pipeline(args: SimpleNamespace) -> None:
             except ValueError:
                 ic("Parquet generation completed")
                 continue
-        del bag, sequence_ddf
-        client.run(gc.collect)
-        client.run(trim_memory)
 
         combined_extraction_datasets = client.gather(
             client.submit(merge_parquets, args, rvals, sample, barcode)
@@ -448,6 +446,19 @@ def run_pipeline(args: SimpleNamespace) -> None:
         combined_extraction_datasets = (
             combined_extraction_datasets.compute().repartition("100MiB")
         )
+
+        ic(
+            combined_extraction_datasets.shape[0].compute()
+            == sequence_ddf.shape[0].compute()
+        )
+        assert (
+            combined_extraction_datasets.shape[0].compute()
+            == sequence_ddf.shape[0].compute()
+        )
+
+        del bag, sequence_ddf
+        client.run(gc.collect)
+        client.run(trim_memory)
 
         ic("Save concatenated results as parquets...")
         combined_extraction_datasets.to_parquet(
@@ -457,15 +468,19 @@ def run_pipeline(args: SimpleNamespace) -> None:
             write_metadata_file=True,
             compute=True,
         )
+
         ic("Full result parquet generation completed, load parquets")
         combined_extraction_datasets = dd.read_parquet(
             f"{args.system_structure.full_mat_dir}",
             engine="pyarrow",
             calculate_divisions=True,
+            # split_row_groups=True,
         )
+        # scattered_extraction_datasets = client.scatter(combined_extraction_datasets)
         f = client.submit(
             finalize, combined_extraction_datasets, args, rvals, sample, barcode
         )
+
         output_futures.append(f)
 
         # ic(
