@@ -1,3 +1,4 @@
+import gc
 import os
 import pathlib
 import subprocess as sp
@@ -58,10 +59,23 @@ def merge_parquets(
             all_extraction_delayed_datasts.append(delayed_fragmented_parquets)
 
         combined_extraction_datasets = binary_tree_merge(all_extraction_delayed_datasts)
-        # combined_extraction_datasets.visualize(
-        #     filename=f"{args.system_structure.result_dir}/merge_full_matrix.png"
-        # )
-        # combined_extraction_datasets = combined_extraction_datasets.persist()
+        return combined_extraction_datasets
+
+    except Exception as e:
+        ic(e)
+        ic(traceback.format_exc())
+        args.logger.error(e)
+        return -1
+
+
+def finalize(
+    combined_extraction_datasets,
+    args,
+    rvals,
+    sample,
+    barcode,
+):
+    try:
 
         ic("Remove ambiguous reads...")
         combined_extraction_datasets = combined_extraction_datasets[
@@ -77,16 +91,15 @@ def merge_parquets(
         combined_extraction_datasets.compute().to_csv(
             f"{args.system_structure.result_dir}/read_counts.csv",
             index=True,
-            single_file=True,
+            # single_file=True,
+            # compute=True,
         )
 
         ic(f"{sample}+{barcode}: Final read count table was generated.")
-        return 0
 
+        return 0
     except Exception as e:
         ic(e)
-        ic(traceback.format_exc())
-        args.logger.error(e)
         return -1
 
 
@@ -210,6 +223,7 @@ class SystemStructure(object):
         )
         self.result_dir = Helper.mkdir_if_not(self.output_sample_organizer[sample_name])
         self.parquet_dir = Helper.mkdir_if_not(self.result_dir / "parquets")
+        self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
 
         if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
             sp.run(
@@ -424,13 +438,35 @@ def run_pipeline(args: SimpleNamespace) -> None:
             except ValueError:
                 ic("Parquet generation completed")
                 continue
-
+        del bag, sequence_ddf
+        client.run(gc.collect)
         client.run(trim_memory)
-        output_futures.append(
+
+        combined_extraction_datasets = client.gather(
             client.submit(merge_parquets, args, rvals, sample, barcode)
         )
+        combined_extraction_datasets = (
+            combined_extraction_datasets.compute().repartition("100MiB")
+        )
 
-        del bag, sequence_ddf
+        ic("Save concatenated results as parquets...")
+        combined_extraction_datasets.to_parquet(
+            f"{args.system_structure.full_mat_dir}",
+            engine="pyarrow",
+            write_index=True,
+            write_metadata_file=True,
+            compute=True,
+        )
+        ic("Full result parquet generation completed, load parquets")
+        combined_extraction_datasets = dd.read_parquet(
+            f"{args.system_structure.full_mat_dir}",
+            engine="pyarrow",
+            calculate_divisions=True,
+        )
+        f = client.submit(
+            finalize, combined_extraction_datasets, args, rvals, sample, barcode
+        )
+        output_futures.append(f)
 
         # ic(
         #     f"Extraction process completed and merging job fired.{100*(sample_i+1)}/{len(args.samples)}%"

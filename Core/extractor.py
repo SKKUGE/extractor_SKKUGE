@@ -8,6 +8,7 @@ __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
 
+import gc
 import pathlib
 import traceback
 
@@ -63,7 +64,8 @@ def extract_read_cnts(
                 barcode, regex=True
             )
 
-            if i % (2**3) == 0:  # DEBUG
+            # if i % (barcode_df.shape[0] // 2) == 0:  # DEBUG
+            if i % (2**2) == 0:  # DEBUG
                 # ic(i)
                 sequence_frame = sequence_frame.persist()
 
@@ -84,6 +86,7 @@ def extract_read_cnts(
             compute=True,
         )
         del sequence_frame
+        gc.collect()
         return f"{result_dir}/parquets/{chunk_number}"
 
     except Exception as e:
