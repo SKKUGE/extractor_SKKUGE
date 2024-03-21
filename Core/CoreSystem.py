@@ -36,7 +36,7 @@ def binary_tree_merge(dataframes):
     mid = len(dataframes) // 2
     left = binary_tree_merge(dataframes[:mid])
     right = binary_tree_merge(dataframes[mid:])
-    return left.merge(right, how="left", left_index=True, right_index=True)
+    return left.merge(right, how="left", left_index=True, right_index=True).persist()
 
 
 def merge_parquets(
@@ -332,7 +332,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         processes=True,
         n_workers=N_PHYSICAL_CORES,  # DEBUG
         threads_per_worker=2,
-        memory_limit="4GiB",
+        memory_limit="16GiB",
         dashboard_address=":40928",
     )
     client = Client(cluster)

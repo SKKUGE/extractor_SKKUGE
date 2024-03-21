@@ -63,7 +63,7 @@ def extract_read_cnts(
                 barcode, regex=True
             )
 
-            if i % (2**3) == 0:  # DEBUG
+            if i % (2**12) == 0:  # DEBUG
                 # ic(i)
                 sequence_frame = sequence_frame.persist()
 
@@ -83,7 +83,7 @@ def extract_read_cnts(
             write_metadata_file=True,
             compute=True,
         )
-        del sequence_frame
+        del sequence_frame, barcode_df
         return f"{result_dir}/parquets/{chunk_number}"
 
     except Exception as e:
