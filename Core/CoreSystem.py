@@ -3,7 +3,6 @@ import pathlib
 import subprocess as sp
 import sys
 import traceback
-from functools import reduce
 from types import SimpleNamespace
 
 from psutil import cpu_count
@@ -31,6 +30,15 @@ def trim_memory() -> int:
     return libc.malloc_trim(0)
 
 
+def binary_tree_merge(dataframes):
+    if len(dataframes) == 1:
+        return dataframes[0]
+    mid = len(dataframes) // 2
+    left = binary_tree_merge(dataframes[:mid])
+    right = binary_tree_merge(dataframes[mid:])
+    return left.merge(right, how="left", left_index=True, right_index=True)
+
+
 def merge_parquets(
     args,
     rvals,
@@ -49,10 +57,7 @@ def merge_parquets(
             ).set_index("ID")
             all_extraction_delayed_datasts.append(delayed_fragmented_parquets)
 
-        combined_extraction_datasets = delayed(reduce)(
-            lambda x, y: x.merge(y, how="left", left_index=True, right_index=True),
-            all_extraction_delayed_datasts,
-        )
+        combined_extraction_datasets = binary_tree_merge(all_extraction_delayed_datasts)
         combined_extraction_datasets.visualize(
             filename=f"{args.system_structure.result_dir}/merge_full_matrix.png"
         )
@@ -75,7 +80,7 @@ def merge_parquets(
             single_file=True,
         )
 
-        # ic(f"{sample}+{barcode}: Final read count table was generated.")
+        ic(f"{sample}+{barcode}: Final read count table was generated.")
         return 0
 
     except Exception as e:
@@ -242,6 +247,9 @@ class ExtractorRunner:
         ):
             # Load input file from input sample folder (only one file)
             if file_path.suffix in [".fastq", ".fq", ".fastq.gz", ".fq.gz"]:
+                ic(
+                    f"Sample name : {args.system_structure.input_sample_organizer[self.sample]}"
+                )
                 ic(f"File name : {file_path.stem}")
                 self.args.system_structure.input_file_organizer[self.sample] = (
                     pathlib.Path.cwd() / file_path
@@ -353,7 +361,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
             )
         )
         sequence_ddf = sequence_ddf.drop(columns=["Separator", "Quality"]).repartition(
-            "128MiB"
+            "100MiB"
         )  # drop quality sequence
 
         ic("Save NGS reads as parquets...")
@@ -417,12 +425,12 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 ic("Parquet generation completed")
                 continue
 
+        client.run(trim_memory)
         output_futures.append(
             client.submit(merge_parquets, args, rvals, sample, barcode)
         )
-        # fire_and_forget(merge_future)
-        # del bag, sequence_ddf
-        # client.run(trim_memory)
+
+        del bag, sequence_ddf
 
         # ic(
         #     f"Extraction process completed and merging job fired.{100*(sample_i+1)}/{len(args.samples)}%"
