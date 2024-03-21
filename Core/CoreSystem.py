@@ -383,8 +383,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ic("Loading barcode file...")
         barcode_row_length = sum(1 for row in open(barcode, "r"))
         chunk_size = (
-            barcode_row_length // (N_PHYSICAL_CORES)
-            if (barcode_row_length // (N_PHYSICAL_CORES)) >= 1
+            barcode_row_length // (N_PHYSICAL_CORES * 2)
+            if (barcode_row_length // (N_PHYSICAL_CORES * 2)) >= 1
             else barcode_row_length
         )
         # chunk_size = 64
