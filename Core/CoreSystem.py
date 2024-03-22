@@ -1,4 +1,3 @@
-import gc
 import os
 import pathlib
 import subprocess as sp
@@ -59,6 +58,10 @@ def merge_parquets(
             all_extraction_delayed_datasts.append(delayed_fragmented_parquets)
 
         combined_extraction_datasets = binary_tree_merge(all_extraction_delayed_datasts)
+        combined_extraction_datasets.visualize(
+            filename=f"{args.system_structure.result_dir}/merging.png"
+        )
+
         return combined_extraction_datasets
 
     except Exception as e:
@@ -443,9 +446,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         combined_extraction_datasets = client.gather(
             client.submit(merge_parquets, args, rvals, sample, barcode)
         )
-        combined_extraction_datasets = (
-            combined_extraction_datasets.compute().repartition("100MiB")
-        )
+        combined_extraction_datasets = combined_extraction_datasets.compute()
 
         ic(
             combined_extraction_datasets.shape[0].compute()
@@ -457,25 +458,25 @@ def run_pipeline(args: SimpleNamespace) -> None:
         )
 
         del bag, sequence_ddf
-        client.run(gc.collect)
+        # client.run(gc.collect)
         client.run(trim_memory)
 
-        ic("Save concatenated results as parquets...")
-        combined_extraction_datasets.to_parquet(
-            f"{args.system_structure.full_mat_dir}",
-            engine="pyarrow",
-            write_index=True,
-            write_metadata_file=True,
-            compute=True,
-        )
+        # ic("Save concatenated results as parquets...")
+        # combined_extraction_datasets.to_parquet(
+        #     f"{args.system_structure.full_mat_dir}",
+        #     engine="pyarrow",
+        #     write_index=True,
+        #     write_metadata_file=True,
+        #     compute=True,
+        # )
 
-        ic("Full result parquet generation completed, load parquets")
-        combined_extraction_datasets = dd.read_parquet(
-            f"{args.system_structure.full_mat_dir}",
-            engine="pyarrow",
-            calculate_divisions=True,
-            # split_row_groups=True,
-        )
+        # ic("Full result parquet generation completed, load parquets")
+        # combined_extraction_datasets = dd.read_parquet(
+        #     f"{args.system_structure.full_mat_dir}",
+        #     engine="pyarrow",
+        #     calculate_divisions=True,
+        #     # split_row_groups=True,
+        # )
         # scattered_extraction_datasets = client.scatter(combined_extraction_datasets)
         f = client.submit(
             finalize, combined_extraction_datasets, args, rvals, sample, barcode
