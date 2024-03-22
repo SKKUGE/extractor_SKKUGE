@@ -379,7 +379,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
             )
         )
         sequence_ddf = sequence_ddf.drop(columns=["Separator", "Quality"]).repartition(
-            "100MiB"
+            "100MB"
         )  # drop quality sequence
 
         ic("Save NGS reads as parquets...")
@@ -446,7 +446,9 @@ def run_pipeline(args: SimpleNamespace) -> None:
         combined_extraction_datasets = client.gather(
             client.submit(merge_parquets, args, rvals, sample, barcode)
         )
-        combined_extraction_datasets = combined_extraction_datasets.compute()
+        combined_extraction_datasets = (
+            combined_extraction_datasets.compute().repartition("100MB")
+        )
 
         ic(
             combined_extraction_datasets.shape[0].compute()
@@ -461,14 +463,14 @@ def run_pipeline(args: SimpleNamespace) -> None:
         # client.run(gc.collect)
         client.run(trim_memory)
 
-        # ic("Save concatenated results as parquets...")
-        # combined_extraction_datasets.to_parquet(
-        #     f"{args.system_structure.full_mat_dir}",
-        #     engine="pyarrow",
-        #     write_index=True,
-        #     write_metadata_file=True,
-        #     compute=True,
-        # )
+        ic("Save concatenated results as parquets...")
+        combined_extraction_datasets.to_parquet(
+            f"{args.system_structure.full_mat_dir}",
+            engine="pyarrow",
+            write_index=True,
+            write_metadata_file=True,
+            compute=True,
+        )
 
         # ic("Full result parquet generation completed, load parquets")
         # combined_extraction_datasets = dd.read_parquet(
