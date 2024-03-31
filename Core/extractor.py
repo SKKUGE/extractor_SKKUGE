@@ -12,34 +12,10 @@ import gc
 import pathlib
 import traceback
 
-import dask.dataframe as dd
-import pandas as pd
 from icecream import ic
 
-# def load_test():
-#     import time  # debug
 
-#     if chunk_number is not None:
-#         ic(chunk_number)
-
-#     start_time = time.time()
-#     cnt = 0
-#     while True:
-#         cnt += 1
-#         ic(f"{chunk_number}:{cnt}")
-#         # time.sleep(0.1)
-#         if time.time() - start_time >= 5:
-#             break
-
-
-def extract_read_cnts(
-    sequence_frame: dd.DataFrame,
-    barcode_df: pd.DataFrame,
-    result_dir,
-    sep=",",
-    logger=None,
-    chunk_number=None,
-):
+def extractor_main(sequence_frame, barcode_df, logger, result_dir, sep, chunk_number):
     try:
         if chunk_number is None:
             raise ValueError("chunk_number is not defined")
@@ -64,15 +40,9 @@ def extract_read_cnts(
                 barcode, regex=True
             )
 
-            # if i % (barcode_df.shape[0] // 2) == 0:  # DEBUG
-            if i % (2**2) == 0:  # DEBUG
+            if i % (2**3) == 0:  # DEBUG
                 # ic(i)
                 sequence_frame = sequence_frame.persist()
-
-        # Drop heavy columns
-        sequence_frame = sequence_frame.drop(
-            columns=["Sequence"],
-        )
 
         # OPTION 1 : Save as parquet
         pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)
@@ -87,6 +57,9 @@ def extract_read_cnts(
         )
         del sequence_frame
         gc.collect()
+        logger.info("Barcode extraction completed")
+        logger.info("Merging parquet files...")
+
         return f"{result_dir}/parquets/{chunk_number}"
 
     except Exception as e:
@@ -94,19 +67,3 @@ def extract_read_cnts(
         ic(traceback.format_exc())
         logger.error(e)
         return -1
-
-
-def extractor_main(sequence, barcode, logger, result_dir, sep, chunk_number):
-
-    rval = extract_read_cnts(
-        sequence, barcode, result_dir, sep, logger, chunk_number=chunk_number
-    )  # return 0 upon successful completion
-
-    if rval == -1:
-        ic(rval)
-        logger.error("Barcode extraction failed")
-        return rval
-
-    logger.info("Barcode extraction completed")
-    logger.info("Merging parquet files...")
-    return rval  # OPTION 1: parquet path
