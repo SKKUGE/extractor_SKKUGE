@@ -8,8 +8,6 @@ __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
 
-import gc
-import pathlib
 import traceback
 
 import dask.dataframe as dd
@@ -64,49 +62,19 @@ def extract_read_cnts(
                 barcode, regex=True
             )
 
-            # if i % (barcode_df.shape[0] // 2) == 0:  # DEBUG
-            if i % (2**2) == 0:  # DEBUG
-                # ic(i)
-                sequence_frame = sequence_frame.persist()
-
-        # Drop heavy columns
-        sequence_frame = sequence_frame.drop(
-            columns=["Sequence"],
-        )
-
-        # OPTION 1 : Save as parquet
-        pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)
-        sequence_frame.visualize(filename=f"{result_dir}/visualize/{chunk_number}.png")
-        sequence_frame.to_parquet(
-            f"{result_dir}/parquets/{chunk_number}",
-            compression="snappy",
-            engine="pyarrow",
-            write_index=True,
-            write_metadata_file=True,
-            compute=True,
-        )
-        del sequence_frame
-        gc.collect()
-        return f"{result_dir}/parquets/{chunk_number}"
+        return sequence_frame
 
     except Exception as e:
         ic(e)
         ic(traceback.format_exc())
-        logger.error(e)
+
         return -1
 
 
-def extractor_main(sequence, barcode, logger, result_dir, sep, chunk_number):
+def extractor_main(sequence, barcode, logger, result_dir, sep, chunk_number=0):
 
     rval = extract_read_cnts(
         sequence, barcode, result_dir, sep, logger, chunk_number=chunk_number
-    )  # return 0 upon successful completion
-
-    if rval == -1:
-        ic(rval)
-        logger.error("Barcode extraction failed")
-        return rval
-
+    )
     logger.info("Barcode extraction completed")
-    logger.info("Merging parquet files...")
-    return rval  # OPTION 1: parquet path
+    return rval
