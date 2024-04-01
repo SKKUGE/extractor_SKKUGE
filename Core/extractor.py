@@ -34,15 +34,20 @@ def extractor_main(sequence_frame, barcode_df, logger, result_dir, sep, chunk_nu
 
         ic(f"Barcode extraction initiated...{chunk_number}")
 
-        for i, (gene, barcode) in barcode_df.iterrows():
+        i = 0
+        for ntp in barcode_df.itertuples():
             # ic(gene, barcode) # DEBUG
-            sequence_frame[gene] = sequence_frame["Sequence"].str.contains(
-                barcode, regex=True
-            )
+            gene = ntp.Gene
+            barcode = ntp.Barcode
+            query_result = sequence_frame["Sequence"].str.contains(barcode, regex=True)
+            # Reduce sparsity by dropping undetected barcode columns
 
-            if i % (2**3) == 0:  # DEBUG
-                # ic(i)
+            if query_result.sum().compute() != 0:
+                sequence_frame[gene] = query_result
                 sequence_frame = sequence_frame.persist()
+                i += 1
+            # if i % (2**3) == 0:  # DEBUG
+            # ic(i)
 
         # OPTION 1 : Save as parquet
         pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)

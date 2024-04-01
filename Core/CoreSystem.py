@@ -1,3 +1,4 @@
+import asyncio
 import os
 import pathlib
 import subprocess as sp
@@ -42,7 +43,7 @@ def binary_tree_merge(dataframes):
     mid = len(dataframes) // 2
     left = binary_tree_merge(dataframes[:mid])
     right = binary_tree_merge(dataframes[mid:])
-    return left.join(right, on="ID", how="left")
+    return left.join(right, on="ID", how="outer")
 
 
 def merge_parquets(
@@ -62,9 +63,12 @@ def merge_parquets(
         lazy_combined_extraction_datasets = binary_tree_merge(
             all_extraction_delayed_datasts
         )
+
+        # Reduce sparsity
         lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.select(
             pl.exclude("^.*_right$")
         )
+
         return lazy_combined_extraction_datasets
 
     except Exception as e:
@@ -74,7 +78,24 @@ def merge_parquets(
         return -1
 
 
-def finalize(
+async def get_read_count_table(lzdf):
+    lzdf = lzdf.drop(columns=["Sequence"])
+
+    ic("Remove ambiguous reads...")
+    lzdf = lzdf.with_columns(ambiguity=pl.sum_horizontal(*lzdf.columns[1:]))
+
+    lzdf = lzdf.filter(pl.col("ambiguity") <= 2)  # Remove ambiguous sequences
+    lzdf = lzdf.drop("ambiguity", "ID")
+
+    ic("Calculating read counts...")
+    lzdf = lzdf.sum()
+
+    lzdf = lzdf.collect_async(streaming=True)
+
+    return await lzdf
+
+
+async def finalize(
     lazy_combined_extraction_datasets,
     args,
     sample,
@@ -83,34 +104,28 @@ def finalize(
     try:
         ic("Finalizing extraction...")
         # raw_sequences = combined_extraction_datasets["Sequence"]
-        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.drop(
-            columns=["Sequence"]
+
+        lazy_combined_extraction_datasets = await get_read_count_table(
+            lazy_combined_extraction_datasets
         )
 
-        ic("Remove ambiguous reads...")
-        lazy_combined_extraction_datasets = (
-            lazy_combined_extraction_datasets.with_columns(
-                ambiguity=pl.sum_horizontal(
-                    *lazy_combined_extraction_datasets.columns[1:]
-                )
+        combined_extraction_datasets = lazy_combined_extraction_datasets.to_pandas().T
+        combined_extraction_datasets.index.name = "Gene"
+        combined_extraction_datasets.columns = ["Reads"]
+
+        combined_extraction_datasets = combined_extraction_datasets.join(
+            pd.read_csv(
+                barcode,
+                sep=args.sep,
+                header=None,
+                names=["Gene", "Barcode"],
             )
-        )
-        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.filter(
-            pl.col("ambiguity") <= 2
-        )  # Remove ambiguous sequences
-        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.drop(
-            "ambiguity", "ID"
-        )
-        ic("Calculating read counts...")
-        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.sum()
+            .set_index("Gene")
+            .drop(columns=["Barcode"]),
+            how="outer",
+        ).fillna(0)
 
-        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.collect(
-            streaming=True
-        ).to_pandas()
-        lazy_combined_extraction_datasets.columns.name = "Gene"
-        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.T.dropna()
-        lazy_combined_extraction_datasets.columns = ["Reads"]
-        lazy_combined_extraction_datasets.to_csv(
+        combined_extraction_datasets.to_csv(
             f"{args.system_structure.result_dir}/read_counts.csv",
             sep=",",
             header=True,
@@ -119,10 +134,10 @@ def finalize(
 
         ic(f"{sample}+{barcode}: Final read count table was generated.")
 
-        return [0]
+        return 0
     except Exception as e:
         ic(e)
-        return [-1]
+        return -1
 
 
 class Helper(object):
@@ -377,6 +392,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
     ic(client)
     ic(client.dashboard_link)
 
+    loop = asyncio.get_event_loop()
     polars_results = []
     for sample, barcode in tqdm(args.samples):
         ExtractorRunner(
@@ -417,8 +433,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ic("Loading barcode file...")
         barcode_row_length = sum(1 for row in open(barcode, "r"))
         chunk_size = (
-            barcode_row_length // (N_PHYSICAL_CORES)
-            if (barcode_row_length // (N_PHYSICAL_CORES)) >= 1
+            barcode_row_length // (N_PHYSICAL_CORES - 1)
+            if (barcode_row_length // (N_PHYSICAL_CORES - 1)) >= 1
             else barcode_row_length
         )
 
@@ -491,15 +507,19 @@ def run_pipeline(args: SimpleNamespace) -> None:
             source=f"{args.system_structure.full_mat_dir}/*.parquet",
         )
 
-        indel_analysis()  # TODO: Indel analysis using the full matrix
         polars_results.append(
-            finalize(
-                lazy_combined_extraction_datasets,
-                args=args,
-                sample=sample,
-                barcode=barcode,
+            loop.create_task(
+                finalize(
+                    lazy_combined_extraction_datasets,
+                    args=args,
+                    sample=sample,
+                    barcode=barcode,
+                )
             )
         )
+        indel_analysis()  # TODO: Indel analysis using the full matrix
 
+    loop.run_until_complete(asyncio.gather(*polars_results))
+    loop.close()
     ic("All merging jobs finished...")
     ic(polars_results)
