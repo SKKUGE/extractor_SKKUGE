@@ -11,7 +11,6 @@ N_PHYSICAL_CORES = cpu_count(logical=False)
 
 os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
 from dask import config as dcf
-from dask import delayed
 
 dcf.set({"dataframe.query-planning": False})
 import ctypes
@@ -30,13 +29,20 @@ def trim_memory() -> int:
     return libc.malloc_trim(0)
 
 
+def indel_analysis():
+    ic("Indel analysis... (Not implemented yet)")
+    # Use CRISPREsso API
+
+    return 0
+
+
 def binary_tree_merge(dataframes):
     if len(dataframes) == 1:
         return dataframes[0]
     mid = len(dataframes) // 2
     left = binary_tree_merge(dataframes[:mid])
     right = binary_tree_merge(dataframes[mid:])
-    return dd.concat([left, right.drop(columns=["Sequence"])], axis=1)
+    return left.join(right, on="ID", how="left")
 
 
 def merge_parquets(
@@ -48,22 +54,18 @@ def merge_parquets(
 
         all_extraction_delayed_datasts = []
         for file in rvals:
-            delayed_fragmented_parquets = delayed(dd.read_parquet)(
-                path=file,
-                engine="pyarrow",
-                calculate_divisions=True,
-            ).set_index(["ID"])
-            all_extraction_delayed_datasts.append(delayed_fragmented_parquets)
+            lazy_fragmented_parquets = pl.scan_parquet(
+                f"{file}/*.parquet",
+            )
+            all_extraction_delayed_datasts.append(lazy_fragmented_parquets)
 
-        combined_extraction_datasets = delayed(binary_tree_merge)(
+        lazy_combined_extraction_datasets = binary_tree_merge(
             all_extraction_delayed_datasts
         )
-
-        combined_extraction_datasets.visualize(
-            filename=f"{args.system_structure.result_dir}/merging.png"
+        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.select(
+            pl.exclude("^.*_right$")
         )
-
-        return combined_extraction_datasets
+        return lazy_combined_extraction_datasets
 
     except Exception as e:
         ic(e)
@@ -73,7 +75,7 @@ def merge_parquets(
 
 
 def finalize(
-    combined_extraction_datasets,
+    lazy_combined_extraction_datasets,
     args,
     sample,
     barcode,
@@ -81,23 +83,34 @@ def finalize(
     try:
         ic("Finalizing extraction...")
         # raw_sequences = combined_extraction_datasets["Sequence"]
-        combined_extraction_datasets = combined_extraction_datasets.drop(
+        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.drop(
             columns=["Sequence"]
-        )  # TODO : indel analysis
+        )
 
         ic("Remove ambiguous reads...")
-        combined_extraction_datasets = combined_extraction_datasets.filter(
-            combined_extraction_datasets.sum(axis=1) <= 2
+        lazy_combined_extraction_datasets = (
+            lazy_combined_extraction_datasets.with_columns(
+                ambiguity=pl.sum_horizontal(
+                    *lazy_combined_extraction_datasets.columns[1:]
+                )
+            )
+        )
+        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.filter(
+            pl.col("ambiguity") <= 2
         )  # Remove ambiguous sequences
-
+        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.drop(
+            "ambiguity", "ID"
+        )
         ic("Calculating read counts...")
-        combined_extraction_datasets = combined_extraction_datasets.sum()
+        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.sum()
 
-        combined_extraction_datasets = combined_extraction_datasets.to_pandas()
-        combined_extraction_datasets.columns.name = "Gene"
-        combined_extraction_datasets = combined_extraction_datasets.T.dropna()
-        combined_extraction_datasets.columns = ["Reads"]
-        combined_extraction_datasets.to_csv(
+        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.collect(
+            streaming=True
+        ).to_pandas()
+        lazy_combined_extraction_datasets.columns.name = "Gene"
+        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.T.dropna()
+        lazy_combined_extraction_datasets.columns = ["Reads"]
+        lazy_combined_extraction_datasets.to_csv(
             f"{args.system_structure.result_dir}/read_counts.csv",
             sep=",",
             header=True,
@@ -391,8 +404,6 @@ def run_pipeline(args: SimpleNamespace) -> None:
         sequence_ddf.to_parquet(
             f"{args.system_structure.seq_split_dir}",
             engine="pyarrow",
-            write_index=True,
-            write_metadata_file=True,
             compute=True,
         )
         ic("Parquet generation completed, load parquets")
@@ -410,7 +421,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
             if (barcode_row_length // (N_PHYSICAL_CORES)) >= 1
             else barcode_row_length
         )
-        # chunk_size = 64
+
         barcode_df = pd.read_csv(
             barcode,
             sep=args.sep,
@@ -447,44 +458,46 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 continue
 
         # BUG: Memory error
-        combined_extraction_datasets = merge_parquets(
+        lazy_combined_extraction_datasets = merge_parquets(
             args,
             rvals,
-        ).compute()
+        )
 
+        new_length = (
+            lazy_combined_extraction_datasets.select(pl.len())
+            .collect(streaming=True)
+            .item()
+        )
+        original_length = sequence_ddf.shape[0].compute()
         ic(
-            combined_extraction_datasets.shape[0].compute()
-            == sequence_ddf.shape[0].compute()
+            new_length,
+            original_length,
+            new_length == original_length,
         )
-        assert (
-            combined_extraction_datasets.shape[0].compute()
-            == sequence_ddf.shape[0].compute()
-        )
+        assert new_length == original_length
 
         del bag, sequence_ddf
 
         client.run(trim_memory)
 
         ic("Save concatenated results as parquets...")
-        combined_extraction_datasets = combined_extraction_datasets.repartition(
-            "100MB"
-        ).persist()
-        for i in range(combined_extraction_datasets.npartitions):
-            combined_extraction_datasets.partitions[i].to_parquet(
-                f"{args.system_structure.full_mat_dir}",
-                engine="pyarrow",
-                write_index=True,
-                compute=True,
-            )
+
+        lazy_combined_extraction_datasets.sink_parquet(
+            path=f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
+        )
 
         ic("Full result parquet generation completed, load parquets")
-        combined_extraction_datasets = pl.read_parquet(
+        lazy_combined_extraction_datasets = pl.scan_parquet(
             source=f"{args.system_structure.full_mat_dir}/*.parquet",
         )
 
+        indel_analysis()  # TODO: Indel analysis using the full matrix
         polars_results.append(
             finalize(
-                combined_extraction_datasets, args=args, sample=sample, barcode=barcode
+                lazy_combined_extraction_datasets,
+                args=args,
+                sample=sample,
+                barcode=barcode,
             )
         )
 

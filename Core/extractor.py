@@ -51,9 +51,8 @@ def extractor_main(sequence_frame, barcode_df, logger, result_dir, sep, chunk_nu
             f"{result_dir}/parquets/{chunk_number}",
             compression="snappy",
             engine="pyarrow",
-            write_index=True,
-            write_metadata_file=True,
             compute=True,
+            write_index=False,
         )
         del sequence_frame
         gc.collect()
