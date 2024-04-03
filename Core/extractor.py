@@ -14,9 +14,7 @@ import traceback
 from icecream import ic
 
 
-def extractor_main(
-    sequence_frame, gene, barcode, logger, result_dir, sep, chunk_number=0
-):
+def extractor_main(sequence_frame, ntp_barcode, logger, result_dir, chunk_number=0):
     start_time = time.time()
     try:
         if chunk_number is None:
@@ -24,19 +22,20 @@ def extractor_main(
 
         # ic(f"Barcode extraction initiated...{chunk_number}")
 
-        query_result = sequence_frame["Sequence"].str.contains(barcode, regex=True)
-        sequence_frame[gene] = query_result
+        gene = ntp_barcode.Gene
+        barcodes = [
+            getattr(ntp_barcode, key) for key in ntp_barcode._fields if "Barcode" in key
+        ]
 
-        # Reduce sparsity by dropping undetected barcode columns
-        # sequence_frame["Undetected"] = False
-        # sequence_frame["Undetected"] = sequence_frame["Undetected"].mask(
-        #     sequence_frame.iloc[:, 2:].sum(axis=1) == 0, True
-        # )
+        query_result = [
+            sequence_frame["Sequence"].str.contains(str(barcode), regex=False)
+            for barcode in barcodes
+        ]
 
-        # sequence_frame = sequence_frame.loc[sequence_frame["Undetected"] != True].drop(
-        #     columns=["Undetected", "Sequence"]
-        # )
         sequence_frame = sequence_frame.drop(columns=["Sequence"])
+        sequence_frame[gene] = True
+        for q in query_result:
+            sequence_frame[gene] &= q
 
         sequence_frame.to_parquet(
             f"{result_dir}/parquets/{chunk_number}",
@@ -46,9 +45,9 @@ def extractor_main(
             write_index=True,
         )
         end_time = time.time()
-        ic(
-            f"Barcode extraction finished...{chunk_number} in {end_time-start_time} seconds"
-        )
+        # ic(
+        #     f"Barcode extraction finished...{chunk_number} in {end_time-start_time} seconds"
+        # )
 
         return f"{result_dir}/parquets/{chunk_number}"
 

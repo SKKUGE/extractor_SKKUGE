@@ -29,6 +29,12 @@ def trim_memory() -> int:
     return libc.malloc_trim(0)
 
 
+async def save_as_parquet(lzdf, path):
+    ic("Save joined results as parquets...")
+    lzdf.sink_parquet(path=path)
+    return 0
+
+
 def indel_analysis():
     ic("Indel analysis... (Not implemented yet)")
     # Use CRISPREsso API
@@ -374,7 +380,7 @@ def system_struct_checker(func):
 def run_pipeline(args: SimpleNamespace) -> None:
     # TODO: add parquet remove option
 
-    from Core.extractor import extractor_main as extractor_main
+    from Core.extractor import extractor_main
 
     ic("Initilaizing local cluster...")
 
@@ -431,49 +437,39 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ic(sequence_ddf.npartitions)
 
         # Load barcode file
+        # The barcode writing rule: 1st-column should be name, and the others are n substrings for joint matching
         ic("Loading barcode file...")
         barcode_df = pd.read_csv(
             barcode_path,
             sep=args.sep,
             header=None,
-            names=["Gene", "Barcode"],
         )
-        barcode_df["Barcode"] = barcode_df["Barcode"].str.upper()
-        if not barcode_df["Barcode"].is_unique:
-            # Barcode used as a PK in the database, so duplication is not allowed
-            ic("Barcode duplication detected! Check your program run design")
-            ic("Remove duplicated Barcodes... only the first one will be kept.")
-            barcode_df.drop_duplicates(subset=["Barcode"], keep="first", inplace=True)
-
-        metadata = dict((k, "object") for k in sequence_ddf.columns.values.tolist())
-        metadata.update(dict((k, "bool") for k in barcode_df["Gene"].values.tolist()))
-
-        # Different approahch
+        barcode_df.columns = ["Gene"] + [
+            f"Barcode_{i}" for i in range(1, len(barcode_df.columns))
+        ]
+        barcode_df.loc[:, ["Barcode" in col for col in barcode_df.columns]].transform(
+            lambda x: x.str.upper()
+        )
 
         ic("Pooling queries...")
         futures = []
-        for i, ntp_barcodes in tqdm(enumerate(barcode_df.itertuples())):
-            query_gene = ntp_barcodes.Gene
-            query_barcode = ntp_barcodes.Barcode
-
+        for i, ntp_barcode in tqdm(enumerate(barcode_df.itertuples())):
             f = client.submit(
                 extractor_main,
                 sequence_ddf,
-                query_gene,
-                query_barcode,
+                ntp_barcode,
                 args.logger,
                 args.system_structure.result_dir,
-                args.sep,
                 i,
             )
             futures.append(f)
-        del sequence_ddf
         rvals = client.gather(futures)
         client.run(trim_memory)
         if -1 in rvals:
             ic("Error in extraction, check the log file")
             raise Exception("Error in extraction, check the log file")
         else:
+            # BUG: it blocks processing
             # Asynchronous read count table generation and indel analysis
             ic("Joining extraction results...")
             # Read parquets and join them by polars
@@ -482,17 +478,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 rvals,
                 f"{args.system_structure.seq_split_dir}/*.parquet",
             )
-            del rvals
-            ic("Save joined results as parquets...")
-
-            lazy_combined_extraction_datasets.sink_parquet(
-                path=f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
-            )
-
-            ic("Full result parquet generation completed, load parquets")
-            lazy_combined_extraction_datasets = pl.scan_parquet(
-                f"{args.system_structure.full_mat_dir}/*.parquet",
-            )
+            del sequence_ddf, rvals
 
             read_count_summary_task = loop.create_task(
                 finalize(
@@ -505,6 +491,15 @@ def run_pipeline(args: SimpleNamespace) -> None:
             )
             coroutine_futures.append(read_count_summary_task)
             read_count_summary_task.add_done_callback(coroutine_futures.remove)
+
+            save_full_mat_task = loop.create_task(
+                save_as_parquet(
+                    lazy_combined_extraction_datasets,
+                    f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
+                )
+            )
+            coroutine_futures.append(save_full_mat_task)
+            save_full_mat_task.add_done_callback(coroutine_futures.remove)
 
             # TODO: Indel analysis using the full matrix
             indel_analysis()
