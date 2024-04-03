@@ -8,61 +8,47 @@ __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
 
-import gc
-import pathlib
+import time
 import traceback
 
 from icecream import ic
 
 
-def extractor_main(sequence_frame, barcode_df, logger, result_dir, sep, chunk_number):
+def extractor_main(
+    sequence_frame, gene, barcode, logger, result_dir, sep, chunk_number=0
+):
+    start_time = time.time()
     try:
         if chunk_number is None:
             raise ValueError("chunk_number is not defined")
 
-        if not barcode_df["Gene"].is_unique or not barcode_df["Barcode"].is_unique:
-            # Barcode used as a PK in the database, so duplication is not allowed
-            ic(
-                f"Barcode duplication detected! Check your program run design {chunk_number}"
-            )
-            ic(
-                f"Remove duplicated Barcodes... only the first one will be kept. {chunk_number}"
-            )
-            barcode_df.drop_duplicates(subset=["Barcode"], keep="first", inplace=True)
+        # ic(f"Barcode extraction initiated...{chunk_number}")
 
-        barcode_df["Barcode"] = barcode_df["Barcode"].str.upper()
+        query_result = sequence_frame["Sequence"].str.contains(barcode, regex=True)
+        sequence_frame[gene] = query_result
 
-        ic(f"Barcode extraction initiated...{chunk_number}")
+        # Reduce sparsity by dropping undetected barcode columns
+        # sequence_frame["Undetected"] = False
+        # sequence_frame["Undetected"] = sequence_frame["Undetected"].mask(
+        #     sequence_frame.iloc[:, 2:].sum(axis=1) == 0, True
+        # )
 
-        i = 0
-        for ntp in barcode_df.itertuples():
-            # ic(gene, barcode) # DEBUG
-            gene = ntp.Gene
-            barcode = ntp.Barcode
-            query_result = sequence_frame["Sequence"].str.contains(barcode, regex=True)
-            # Reduce sparsity by dropping undetected barcode columns
+        # sequence_frame = sequence_frame.loc[sequence_frame["Undetected"] != True].drop(
+        #     columns=["Undetected", "Sequence"]
+        # )
+        sequence_frame = sequence_frame.drop(columns=["Sequence"])
 
-            if query_result.sum().compute() != 0:
-                sequence_frame[gene] = query_result
-                sequence_frame = sequence_frame.persist()
-                i += 1
-            # if i % (2**3) == 0:  # DEBUG
-            # ic(i)
-
-        # OPTION 1 : Save as parquet
-        pathlib.Path(f"{result_dir}/visualize").mkdir(parents=True, exist_ok=True)
-        sequence_frame.visualize(filename=f"{result_dir}/visualize/{chunk_number}.png")
         sequence_frame.to_parquet(
             f"{result_dir}/parquets/{chunk_number}",
             compression="snappy",
             engine="pyarrow",
             compute=True,
-            write_index=False,
+            write_index=True,
         )
-        del sequence_frame
-        gc.collect()
-        logger.info("Barcode extraction completed")
-        logger.info("Merging parquet files...")
+        end_time = time.time()
+        ic(
+            f"Barcode extraction finished...{chunk_number} in {end_time-start_time} seconds"
+        )
 
         return f"{result_dir}/parquets/{chunk_number}"
 
