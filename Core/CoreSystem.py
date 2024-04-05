@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from psutil import cpu_count
 
+DEBUGGING = True
 N_PHYSICAL_CORES = cpu_count(logical=False)
 
 os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
@@ -80,6 +81,9 @@ def merge_parquets(
 
         return lazy_combined_extraction_datasets
 
+    except FileNotFoundError as e:
+        ic(e)
+
     except Exception as e:
         ic(e)
         ic(traceback.format_exc())
@@ -106,7 +110,7 @@ async def get_read_count_table(lzdf):
     return await lzdf
 
 
-async def finalize(
+async def get_readcount_table(
     lazy_combined_extraction_datasets,
     args,
     sample,
@@ -268,13 +272,14 @@ class SystemStructure(object):
         self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
 
         if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
-            sp.run(
-                [
-                    "rm",
-                    "-r",
-                    f"{self.result_dir / 'parquets'}",
-                ]
-            )
+            if not DEBUGGING:
+                sp.run(
+                    [
+                        "rm",
+                        "-r",
+                        f"{self.result_dir / 'parquets'}",
+                    ]
+                )
             self.parquet_dir = Helper.mkdir_if_not(
                 self.result_dir / "parquets"
             )  # Re-create the directory
@@ -399,8 +404,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-
     coroutine_futures = []
+
     for sample, barcode_path in tqdm(args.samples):
         ExtractorRunner(
             sample, barcode_path, args
@@ -453,61 +458,86 @@ def run_pipeline(args: SimpleNamespace) -> None:
             lambda x: x.str.upper()
         )
 
-        ic("Pooling queries...")
-        futures = []
-        for i, ntp_barcode in tqdm(enumerate(barcode_df.itertuples())):
-            f = client.submit(
-                extractor_main,
-                sequence_ddf,
-                ntp_barcode,
-                args.logger,
-                args.system_structure.result_dir,
-                i,
-            )
-            futures.append(f)
-        rvals = client.gather(futures)
-        # client.run(trim_memory)
+        if not DEBUGGING:
+            ic("Pooling queries...")
+            futures = []
+            for i, ntp_barcode in tqdm(enumerate(barcode_df.itertuples())):
+                f = client.submit(
+                    extractor_main,
+                    sequence_ddf,
+                    ntp_barcode,
+                    args.logger,
+                    args.system_structure.result_dir,
+                    i,
+                )
+                futures.append(f)
+            rvals = client.gather(futures)
+            # client.run(trim_memory)
+        else:
+            rvals = [
+                f"{args.system_structure.result_dir}/parquets/{p}"
+                for p in os.listdir(f"{args.system_structure.result_dir}/parquets")
+            ]
 
         if -1 in rvals:
             ic("Error in extraction, check the log file")
             raise Exception("Error in extraction, check the log file")
         else:
-            # BUG: it blocks processing
-            # Asynchronous read count table generation and indel analysis
-            ic("Joining extraction results...")
-            # Read parquets and join them by polars
-            lazy_combined_extraction_datasets = merge_parquets(
-                args,
-                rvals,
-                f"{args.system_structure.seq_split_dir}/*.parquet",
-            )
-            del sequence_ddf, rvals
-
-            read_count_summary_task = loop.create_task(
-                finalize(
-                    lazy_combined_extraction_datasets,
-                    args=args,
-                    sample=sample,
-                    barcode_path=barcode_path,
-                    barcode_df=barcode_df,
+            try:
+                # BUG: it blocks processing
+                # Asynchronous read count table generation and indel analysis
+                ic("Joining extraction results...")
+                # Read parquets and join them by polars
+                lazy_combined_extraction_datasets = merge_parquets(
+                    args,
+                    rvals,
+                    f"{args.system_structure.seq_split_dir}/*.parquet",
                 )
-            )
-            coroutine_futures.append(read_count_summary_task)
-            read_count_summary_task.add_done_callback(coroutine_futures.remove)
+                del sequence_ddf, rvals
 
-            save_full_mat_task = loop.create_task(
-                save_as_parquet(
-                    lazy_combined_extraction_datasets,
-                    f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
+                read_count_summary_task = asyncio.ensure_future(
+                    get_readcount_table(
+                        lazy_combined_extraction_datasets,
+                        args=args,
+                        sample=sample,
+                        barcode_path=barcode_path,
+                        barcode_df=barcode_df,
+                    )
                 )
-            )
-            coroutine_futures.append(save_full_mat_task)
-            save_full_mat_task.add_done_callback(coroutine_futures.remove)
+                # read_count_summary_task = loop.create_task(
+                #     finalize(
+                #         lazy_combined_extraction_datasets,
+                #         args=args,
+                #         sample=sample,
+                #         barcode_path=barcode_path,
+                #         barcode_df=barcode_df,
+                #     )
+                # )
+                coroutine_futures.append(read_count_summary_task)
+                read_count_summary_task.add_done_callback(coroutine_futures.remove)
 
-            # TODO: Indel analysis using the full matrix
-            indel_analysis()
+                save_full_mat_task = asyncio.ensure_future(
+                    save_as_parquet(
+                        lazy_combined_extraction_datasets,
+                        f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
+                    )
+                )
+                # save_full_mat_task = loop.create_task(
+                #     save_as_parquet(
+                #         lazy_combined_extraction_datasets,
+                #         f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
+                #     )
+                # )
+                coroutine_futures.append(save_full_mat_task)
+                save_full_mat_task.add_done_callback(coroutine_futures.remove)
 
-    loop.run_until_complete(asyncio.gather(*coroutine_futures))
-    loop.close()
+                # TODO: Indel analysis using the full matrix
+                indel_analysis()
+            except Exception as e:
+                ic("Downstream task failed, check the log file")
+                ic(e)
+                ic(traceback.format_exc())
+
+    loop.run_until_complete(asyncio.gather(*asyncio.all_tasks()))
 
     ic("All merging jobs finished...")
