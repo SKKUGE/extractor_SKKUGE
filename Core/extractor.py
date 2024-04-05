@@ -24,18 +24,26 @@ def extractor_main(sequence_frame, ntp_barcode, logger, result_dir, chunk_number
 
         gene = ntp_barcode.Gene
         barcodes = [
-            getattr(ntp_barcode, key) for key in ntp_barcode._fields if "Barcode" in key
+            f"{getattr(ntp_barcode, key)}"  # TODO: Regex grouping needed
+            for key in ntp_barcode._fields
+            if "Barcode" in key
         ]
 
-        query_result = [
-            sequence_frame["Sequence"].str.contains(str(barcode), regex=False)
-            for barcode in barcodes
-        ]
+        query_result = sequence_frame["Sequence"].str.contains(
+            ".*".join(barcodes), regex=True  # Xarr optimization needed
+        )
+        # query_result = (
+        #     [  # TODO : This part should be optimized with n-dimensional array (Xarr)
+        #         sequence_frame["Sequence"].str.contains(str(barcode), regex=False)
+        #         for barcode in barcodes
+        #     ]
+        # )
 
         sequence_frame = sequence_frame.drop(columns=["Sequence"])
-        sequence_frame[gene] = True
-        for q in query_result:
-            sequence_frame[gene] &= q
+        sequence_frame[gene] = query_result
+        # sequence_frame[gene] = True
+        # for q in query_result:
+        #     sequence_frame[gene] &= q
 
         sequence_frame.to_parquet(
             f"{result_dir}/parquets/{chunk_number}",
@@ -45,9 +53,9 @@ def extractor_main(sequence_frame, ntp_barcode, logger, result_dir, chunk_number
             write_index=True,
         )
         end_time = time.time()
-        # ic(
-        #     f"Barcode extraction finished...{chunk_number} in {end_time-start_time} seconds"
-        # )
+        ic(
+            f"Barcode extraction finished...{chunk_number} in {end_time-start_time} seconds"
+        )
 
         return f"{result_dir}/parquets/{chunk_number}"
 

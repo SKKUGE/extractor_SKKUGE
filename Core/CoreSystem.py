@@ -388,7 +388,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         processes=True,
         n_workers=N_PHYSICAL_CORES,  # DEBUG
         threads_per_worker=2,
-        memory_limit="4GiB",
+        memory_limit="6GiB",
         dashboard_address=":40928",
     )
     client = Client(cluster)
@@ -397,7 +397,9 @@ def run_pipeline(args: SimpleNamespace) -> None:
     ic(client)
     ic(client.dashboard_link)
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     coroutine_futures = []
     for sample, barcode_path in tqdm(args.samples):
         ExtractorRunner(
@@ -443,7 +445,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
             barcode_path,
             sep=args.sep,
             header=None,
-        )
+        ).fillna("")
         barcode_df.columns = ["Gene"] + [
             f"Barcode_{i}" for i in range(1, len(barcode_df.columns))
         ]
@@ -464,7 +466,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
             )
             futures.append(f)
         rvals = client.gather(futures)
-        client.run(trim_memory)
+        # client.run(trim_memory)
+
         if -1 in rvals:
             ic("Error in extraction, check the log file")
             raise Exception("Error in extraction, check the log file")
@@ -506,4 +509,5 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
     loop.run_until_complete(asyncio.gather(*coroutine_futures))
     loop.close()
+
     ic("All merging jobs finished...")
