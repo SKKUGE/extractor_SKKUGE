@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 from psutil import cpu_count
 
-DEBUGGING = False
+DEBUGGING = True
 N_PHYSICAL_CORES = cpu_count(logical=False)
 
 os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
@@ -18,6 +18,7 @@ import ctypes
 
 import dask
 import pandas as pd
+from dask import array as da
 from dask import bag as db
 from dask import dataframe as dd
 from dask.distributed import Client, LocalCluster, wait
@@ -56,38 +57,78 @@ def trim_memory() -> int:
 #     return left.merge(right, left_index=True, right_index=True)
 
 
+# def remove_ambiguous_reads(dataframe_path, summed_vector, args, i):
+#     ic(f"Reading parquet file {dataframe_path}...")
+#     dataframe = dd.read_parquet(
+#         dataframe_path, engine="pyarrow", calculate_divisions=True
+#     )
+#     dataframe["Sum"] = summed_vector
+#     dataframe = dataframe[
+#         (dataframe["Sum"] <= 2)
+#         & (dataframe["Sum"] > 0)  # TODO: Generalize FILTER_CONDITION
+#     ]  # Remove ambiguous sequences sparse
+#     dataframe = dataframe.drop(columns=["Sum"])
+#     dataframe.to_parquet(
+#         f"{args.system_structure.full_mat_dir}/{i}",  # filtered parquets TODO: rename this variable
+#         engine="pyarrow",
+#         write_index=True,
+#         write_metadata_file=True,
+#         compute=True,
+#     )
+
+#     return f"{args.system_structure.full_mat_dir}/{i}"
+
+
 def merge_parquets(
     args,
     rvals,
 ):
 
     try:
-        ic("Merging parquet files...")
-
-        # all_extraction_datasts = []
-        # for file in rvals:
-        #     fragmented_parquets = dd.read_parquet(
-        #         path=file,
-        #         engine="pyarrow",
-        #         calculate_divisions=True,
-        #     ).set_index("ID")
-        #     all_extraction_datasts.append(fragmented_parquets)
-
-        all_extraction_datasets = [
-            dd.read_parquet(
+        ic("Reading parquet files...")
+        lazy_all_extraction_datasets = [
+            dask.delayed(dd.read_parquet)(
                 x,
                 engine="pyarrow",
                 calculate_divisions=True,
             )
             for x in rvals
         ]
-        combined_extraction_datasets = dd.concat(all_extraction_datasets, axis=1)
-        # combined_extraction_datasets = binary_tree_merge(all_extraction_datasets)
-        # combined_extraction_datasets.visualize(
-        #     filename=f"{args.system_structure.result_dir}/merging.png"
-        # )
+        ic("Lazily loading parquet files...")
+        all_extraction_datasets = dask.compute(*lazy_all_extraction_datasets)
+        all_count_vectors = [
+            x.values.astype(int).squeeze().persist() for x in all_extraction_datasets
+        ]
+        delayed_summed_vector = dask.delayed(sum)(all_count_vectors)
+        summed_vector = da.from_delayed(
+            delayed_summed_vector,
+            shape=(len(all_count_vectors[0].compute_chunk_sizes()),),
+            dtype=int,
+        )
 
-        return combined_extraction_datasets
+        ic("Summing up read counts...")
+        rvals = []
+        for i, dataframe in enumerate(
+            all_extraction_datasets
+        ):  # TODO: Refactor this part to a function
+
+            dataframe["Sum"] = summed_vector
+            dataframe = dataframe[
+                (dataframe["Sum"] <= 2)
+                & (dataframe["Sum"] > 0)  # TODO: Generalize FILTER_CONDITION
+            ]  # Remove ambiguous sequences sparse
+            dataframe = dataframe.drop(columns=["Sum"])
+            dataframe = dataframe.persist()
+            dataframe.to_parquet(
+                f"{args.system_structure.full_mat_dir}/{i}",  # filtered parquets TODO: rename this variable
+                engine="pyarrow",
+                write_index=True,
+                write_metadata_file=True,
+                compute=True,
+            )
+            rvals.append(f"{args.system_structure.full_mat_dir}/{i}")
+
+        return rvals
 
     except Exception as e:
         ic(e)
@@ -97,26 +138,35 @@ def merge_parquets(
 
 
 def finalize(
-    combined_extraction_datasets,
+    # combined_extraction_datasets,
+    filtered_parquet_paths,
     args,
     sample,
     barcode,
 ):
     try:
+        ic("Reading parquet files...")
+        lazy_all_extraction_datasets = [
+            dask.delayed(dd.read_parquet)(
+                x,
+                engine="pyarrow",
+                calculate_divisions=True,
+            )
+            for x in filtered_parquet_paths
+        ]
+        ic("Lazily loading parquet files...")
+        all_extraction_datasets = dask.compute(*lazy_all_extraction_datasets)
 
-        ic("Remove ambiguous reads...")
-        combined_extraction_datasets = combined_extraction_datasets[
-            combined_extraction_datasets.sum(axis=1, numeric_only=True) <= 2
-        ]  # Remove ambiguous sequences
+        ic("Summing up read counts...")
+        summed_barcodes = [x.sum(axis=0).persist() for x in all_extraction_datasets]
 
-        ic("Calculating read counts...")
-        combined_extraction_datasets = combined_extraction_datasets.sum(axis=0)
-        combined_extraction_datasets.visualize(
+        all_extraction_datasets = dd.concat(summed_barcodes, axis=0)
+        all_extraction_datasets.visualize(
             filename=f"{args.system_structure.result_dir}/post_processing.png"
         )
 
         ic(f"{sample}+{barcode}: Extraction future generated.")
-        combined_extraction_datasets.compute().to_csv(
+        all_extraction_datasets.compute().to_csv(
             f"{args.system_structure.result_dir}/read_counts.csv",
             index=True,
             # single_file=True,
@@ -379,7 +429,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
     # )
     cluster = LocalCluster(
         processes=True,
-        n_workers=N_PHYSICAL_CORES // 2,  # DEBUG
+        n_workers=N_PHYSICAL_CORES,  # DEBUG
         threads_per_worker=2,
         # memory_limit="4GiB",
         dashboard_address=":40928",
@@ -479,43 +529,52 @@ def run_pipeline(args: SimpleNamespace) -> None:
             # Asynchronous read count table generation and indel analysis
             ic("Joining extraction results...")
 
-            combined_extraction_datasets = client.gather(
+            filtered_parquet_paths = client.gather(
                 client.submit(merge_parquets, args, rvals)
             )
+            # ic(summed_vector)
 
-            ic(
-                combined_extraction_datasets.shape[0].compute()
-                == sequence_ddf.shape[0].compute()
-            )
-            assert (
-                combined_extraction_datasets.shape[0].compute()
-                == sequence_ddf.shape[0].compute()
-            )
+            # ic("Remove ambiguous reads...")
+            # futures = []
+            # for i, x in enumerate(rvals):
+            #     f = client.submit(remove_ambiguous_reads, x, summed_vector, args, i)
+            #     futures.append(f)
+
+            # filtered_parquet_paths = client.gather(futures)
+            # ic(
+            #     combined_extraction_datasets.shape[0].compute()
+            #     == sequence_ddf.shape[0].compute()
+            # )
+            # assert (
+            #     combined_extraction_datasets.shape[0].compute()
+            #     == sequence_ddf.shape[0].compute()
+            # )
 
             del sequence_ddf
             # client.run(gc.collect)
             # client.run(trim_memory)
 
-            ic("Save concatenated results as parquets...")
-            combined_extraction_datasets.to_parquet(
-                f"{args.system_structure.full_mat_dir}",
-                engine="pyarrow",
-                write_index=True,
-                write_metadata_file=True,
-                compute=True,
-            )
+            # ic("Save concatenated results as parquets...")
+            # combined_extraction_datasets.to_parquet(
+            #     f"{args.system_structure.full_mat_dir}",
+            #     engine="pyarrow",
+            #     write_index=True,
+            #     write_metadata_file=True,
+            #     compute=True,
+            # )
 
             ic("Full result parquet generation completed, load parquets")
-            combined_extraction_datasets = dd.read_parquet(
-                f"{args.system_structure.full_mat_dir}",
-                engine="pyarrow",
-                calculate_divisions=True,
-                # split_row_groups=True,
-            )
+            # combined_extraction_datasets = dd.read_parquet(
+            #     f"{args.system_structure.full_mat_dir}",
+            #     engine="pyarrow",
+            #     calculate_divisions=True,
+            #     # split_row_groups=True,
+            # )
             # scattered_extraction_datasets = client.scatter(combined_extraction_datasets)
             f = client.submit(
                 finalize,
-                combined_extraction_datasets,
+                # combined_extraction_datasets,
+                filtered_parquet_paths,
                 args,
                 sample,
                 barcode_path,
