@@ -3,26 +3,43 @@ import pathlib
 import subprocess as sp
 import sys
 import traceback
+from datetime import datetime
 from types import SimpleNamespace
 
 from psutil import cpu_count
 
+DEBUGGING = False
 N_PHYSICAL_CORES = cpu_count(logical=False)
 
 os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
-import pandas as pd
-from dask import config as dcf
-from dask import delayed
 
-dcf.set({"dataframe.query-planning": False})
+
 import ctypes
 
+import dask
+import pandas as pd
 from dask import bag as db
 from dask import dataframe as dd
-from dask.diagnostics import ProgressBar
 from dask.distributed import Client, LocalCluster, wait
+
+# from dask_cuda import LocalCUDACluster
 from icecream import ic
 from tqdm import tqdm
+
+dask.config.set(
+    {
+        "dataframe.convert-string": True,
+        # "dataframe.backend": "cudf",
+    }
+)
+
+
+def time_format():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+ic.configureOutput(prefix=f"{time_format()} | ")
+ic.configureOutput(includeContext=True)
 
 
 def trim_memory() -> int:
@@ -30,37 +47,45 @@ def trim_memory() -> int:
     return libc.malloc_trim(0)
 
 
-def binary_tree_merge(dataframes):
-    if len(dataframes) == 1:
-        return dataframes[0]
-    mid = len(dataframes) // 2
-    left = binary_tree_merge(dataframes[:mid])
-    right = binary_tree_merge(dataframes[mid:])
-    return left.merge(right, how="left", left_index=True, right_index=True).persist()
+# def binary_tree_merge(dataframes):
+#     if len(dataframes) == 1:
+#         return dataframes[0]
+#     mid = len(dataframes) // 2
+#     left = binary_tree_merge(dataframes[:mid])
+#     right = binary_tree_merge(dataframes[mid:])
+#     return left.merge(right, left_index=True, right_index=True)
 
 
 def merge_parquets(
     args,
     rvals,
-    sample,
-    barcode,
 ):
+
     try:
         ic("Merging parquet files...")
 
-        all_extraction_delayed_datasts = []
-        for file in rvals:
-            delayed_fragmented_parquets = delayed(dd.read_parquet)(
-                path=file,
+        # all_extraction_datasts = []
+        # for file in rvals:
+        #     fragmented_parquets = dd.read_parquet(
+        #         path=file,
+        #         engine="pyarrow",
+        #         calculate_divisions=True,
+        #     ).set_index("ID")
+        #     all_extraction_datasts.append(fragmented_parquets)
+
+        all_extraction_datasets = [
+            dd.read_parquet(
+                x,
                 engine="pyarrow",
                 calculate_divisions=True,
-            ).set_index("ID")
-            all_extraction_delayed_datasts.append(delayed_fragmented_parquets)
-
-        combined_extraction_datasets = binary_tree_merge(all_extraction_delayed_datasts)
-        combined_extraction_datasets.visualize(
-            filename=f"{args.system_structure.result_dir}/merging.png"
-        )
+            )
+            for x in rvals
+        ]
+        combined_extraction_datasets = dd.concat(all_extraction_datasets, axis=1)
+        # combined_extraction_datasets = binary_tree_merge(all_extraction_datasets)
+        # combined_extraction_datasets.visualize(
+        #     filename=f"{args.system_structure.result_dir}/merging.png"
+        # )
 
         return combined_extraction_datasets
 
@@ -74,7 +99,6 @@ def merge_parquets(
 def finalize(
     combined_extraction_datasets,
     args,
-    rvals,
     sample,
     barcode,
 ):
@@ -83,7 +107,7 @@ def finalize(
         ic("Remove ambiguous reads...")
         combined_extraction_datasets = combined_extraction_datasets[
             combined_extraction_datasets.sum(axis=1, numeric_only=True) <= 2
-        ].persist()  # Remove ambiguous sequences
+        ]  # Remove ambiguous sequences
 
         ic("Calculating read counts...")
         combined_extraction_datasets = combined_extraction_datasets.sum(axis=0)
@@ -230,13 +254,14 @@ class SystemStructure(object):
         self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
 
         if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
-            sp.run(
-                [
-                    "rm",
-                    "-r",
-                    f"{self.result_dir / 'parquets'}",
-                ]
-            )
+            if not DEBUGGING:
+                sp.run(
+                    [
+                        "rm",
+                        "-r",
+                        f"{self.result_dir / 'parquets'}",
+                    ]
+                )
             self.parquet_dir = Helper.mkdir_if_not(
                 self.result_dir / "parquets"
             )  # Re-create the directory
@@ -342,15 +367,21 @@ def system_struct_checker(func):
 def run_pipeline(args: SimpleNamespace) -> None:
     # TODO: add parquet remove option
 
-    from Core.extractor import extractor_main as extractor_main
+    from Core.extractor import extractor_main
 
     ic("Initilaizing local cluster...")
 
+    # cluster = LocalCUDACluster(
+    # processes=True,
+    # threads_per_worker=2,
+    # memory_limit="4GiB",
+    #     dashboard_address=":40928",
+    # )
     cluster = LocalCluster(
         processes=True,
-        n_workers=N_PHYSICAL_CORES,  # DEBUG
+        n_workers=N_PHYSICAL_CORES // 2,  # DEBUG
         threads_per_worker=2,
-        memory_limit="8GiB",
+        # memory_limit="4GiB",
         dashboard_address=":40928",
     )
     client = Client(cluster)
@@ -360,11 +391,24 @@ def run_pipeline(args: SimpleNamespace) -> None:
     ic(client.dashboard_link)
 
     output_futures = []
-    for sample, barcode in tqdm(args.samples):
+    for sample, barcode_path in tqdm(args.samples):
         ExtractorRunner(
-            sample, barcode, args
+            sample, barcode_path, args
         )  # TODO: refactor its usage to avoid creating an object
-
+        # Load barcode file
+        # The barcode writing rule: 1st-column should be name, and the others are n substrings for joint matching
+        ic("Loading barcode file...")
+        barcode_df = pd.read_csv(
+            barcode_path,
+            sep=args.sep,
+            header=None,
+        ).fillna("")
+        barcode_df.columns = ["Gene"] + [
+            f"Barcode_{i}" for i in range(1, len(barcode_df.columns))
+        ]
+        barcode_df.loc[:, ["Barcode" in col for col in barcode_df.columns]].transform(
+            lambda x: x.str.upper()
+        )
         ic("Loading merged fastq file...")
         bag = db.read_text(
             args.system_structure.input_file_organizer[sample], blocksize="64MiB"
@@ -378,117 +422,110 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
         )
-        sequence_ddf = sequence_ddf.drop(columns=["Separator", "Quality"]).repartition(
-            "100MB"
+        sequence_ddf = sequence_ddf.drop(columns=["Separator", "Quality"]).set_index(
+            "ID", shuffle_method="p2p"
         )  # drop quality sequence
 
         ic("Save NGS reads as parquets...")
         sequence_ddf.to_parquet(
             f"{args.system_structure.seq_split_dir}",
             engine="pyarrow",
+            compute=True,
             write_index=True,
             write_metadata_file=True,
-            compute=True,
         )
-        ic("Parquet generation completed, load parquets")
+        del bag
 
+        ic("Parquet generation completed, load parquets")
         sequence_ddf = dd.read_parquet(
             f"{args.system_structure.seq_split_dir}",
             engine="pyarrow",
             calculate_divisions=True,
         )
-        # Load barcode file
-        ic("Loading barcode file...")
-        barcode_row_length = sum(1 for row in open(barcode, "r"))
-        chunk_size = (
-            barcode_row_length // (N_PHYSICAL_CORES)
-            if (barcode_row_length // (N_PHYSICAL_CORES)) >= 1
-            else barcode_row_length
-        )
-        # chunk_size = 64
-        barcode_df = pd.read_csv(
-            barcode,
-            sep=args.sep,
-            header=None,
-            names=["Gene", "Barcode"],
-            chunksize=chunk_size,
-        )
-        ic("Submitting extraction process...")
-        futures = []
-        for i, barcode_chunk in enumerate(barcode_df):
-            futures.append(
-                client.submit(
+        ic(sequence_ddf.npartitions)
+
+        if not DEBUGGING:
+            ic("Pooling queries...")
+            futures = []
+            for i, ntp_barcode in tqdm(enumerate(barcode_df.itertuples())):
+                f = client.submit(
                     extractor_main,
                     sequence_ddf,
-                    barcode_chunk.iloc[
-                        :, [0, 1]
-                    ].dropna(),  # Use only Gene and Barcode columns
+                    ntp_barcode,
                     args.logger,
                     args.system_structure.result_dir,
-                    args.sep,
-                    chunk_number=i,
+                    i,
                 )
+                futures.append(f)
+            # Gather results
+            ic("Gathering extraction results...")
+            rvals = client.gather(futures)
+            # client.run(trim_memory)
+
+        else:
+            rvals = [
+                f"{args.system_structure.result_dir}/parquets/{p}"
+                for p in os.listdir(f"{args.system_structure.result_dir}/parquets/")
+            ]
+
+            # Remove unexpected files
+
+        if -1 in rvals:
+            ic("Error in extraction, check the log file")
+            raise Exception("Error in extraction, check the log file")
+        else:
+            # I/O bound task; fire and forget?
+
+            # Asynchronous read count table generation and indel analysis
+            ic("Joining extraction results...")
+
+            combined_extraction_datasets = client.gather(
+                client.submit(merge_parquets, args, rvals)
             )
-        # Gather results
-        ic("Gathering extraction results...")
-        with ProgressBar():
-            wait(futures)
-        rvals = client.gather(futures)
-        for rval in rvals:
-            try:
-                if rval == -1:
-                    ic(traceback.format_exc())
-                    raise Exception(f"extractor_main has returned with {rval}")
-            except ValueError:
-                ic("Parquet generation completed")
-                continue
 
-        combined_extraction_datasets = client.gather(
-            client.submit(merge_parquets, args, rvals, sample, barcode)
-        )
-        combined_extraction_datasets = (
-            combined_extraction_datasets.compute().repartition("100MB")
-        )
+            ic(
+                combined_extraction_datasets.shape[0].compute()
+                == sequence_ddf.shape[0].compute()
+            )
+            assert (
+                combined_extraction_datasets.shape[0].compute()
+                == sequence_ddf.shape[0].compute()
+            )
 
-        ic(
-            combined_extraction_datasets.shape[0].compute()
-            == sequence_ddf.shape[0].compute()
-        )
-        assert (
-            combined_extraction_datasets.shape[0].compute()
-            == sequence_ddf.shape[0].compute()
-        )
+            del sequence_ddf
+            # client.run(gc.collect)
+            # client.run(trim_memory)
 
-        del bag, sequence_ddf
-        # client.run(gc.collect)
-        client.run(trim_memory)
+            ic("Save concatenated results as parquets...")
+            combined_extraction_datasets.to_parquet(
+                f"{args.system_structure.full_mat_dir}",
+                engine="pyarrow",
+                write_index=True,
+                write_metadata_file=True,
+                compute=True,
+            )
 
-        ic("Save concatenated results as parquets...")
-        combined_extraction_datasets.to_parquet(
-            f"{args.system_structure.full_mat_dir}",
-            engine="pyarrow",
-            write_index=True,
-            write_metadata_file=True,
-            compute=True,
-        )
+            ic("Full result parquet generation completed, load parquets")
+            combined_extraction_datasets = dd.read_parquet(
+                f"{args.system_structure.full_mat_dir}",
+                engine="pyarrow",
+                calculate_divisions=True,
+                # split_row_groups=True,
+            )
+            # scattered_extraction_datasets = client.scatter(combined_extraction_datasets)
+            f = client.submit(
+                finalize,
+                combined_extraction_datasets,
+                args,
+                sample,
+                barcode_path,
+            )
 
-        # ic("Full result parquet generation completed, load parquets")
-        # combined_extraction_datasets = dd.read_parquet(
-        #     f"{args.system_structure.full_mat_dir}",
-        #     engine="pyarrow",
-        #     calculate_divisions=True,
-        #     # split_row_groups=True,
-        # )
-        # scattered_extraction_datasets = client.scatter(combined_extraction_datasets)
-        f = client.submit(
-            finalize, combined_extraction_datasets, args, rvals, sample, barcode
-        )
+            output_futures.append(f)
 
-        output_futures.append(f)
-
-        # ic(
-        #     f"Extraction process completed and merging job fired.{100*(sample_i+1)}/{len(args.samples)}%"
-        # )
+            # ic(
+            #     f"Extraction process completed and merging job fired.{100*(sample_i+1)}/{len(args.samples)}%"
+            # )
 
     ic("All merging jobs fired. Waiting for the final result...")
     # BUG: result csv not generated
