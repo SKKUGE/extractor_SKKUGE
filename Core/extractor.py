@@ -14,7 +14,7 @@ import traceback
 from icecream import ic
 
 
-def extractor_main(sequence_frame, ntp_barcode, logger, result_dir, chunk_number):
+def extractor_main(sequence_frame, ntp_barcode, logger, result_dir, ):
     start_time = time.time()
     try:
 
@@ -27,29 +27,13 @@ def extractor_main(sequence_frame, ntp_barcode, logger, result_dir, chunk_number
 
         query_result = sequence_frame["Sequence"].str.contains(
             ".*".join(barcodes), regex=True  # Xarr optimization needed
-        )
-        # query_result = (
-        #     [  # TODO : This part should be optimized with n-dimensional array (Xarr)
-        #         sequence_frame["Sequence"].str.contains(str(barcode), regex=False)
-        #         for barcode in barcodes
-        #     ]
-        # )
+        )  # TODO : This part should be optimized with n-dimensional array (Xarr)
 
-        sequence_frame = sequence_frame.drop(columns=["Sequence"])
-
+        sequence_frame = sequence_frame.drop(columns=["Sequence", "Quality"])
         sequence_frame[gene] = query_result
-        # sequence_frame = sequence_frame[sequence_frame[gene] == True]  # Reduce sparsity
 
-        # sequence_frame[gene] = True
-        # for q in query_result:
-        #     sequence_frame[gene] &= q
-
-        # pathlib.Path(f"{result_dir}/parquets/{chunk_number}").mkdir(
-        #     parents=True, exist_ok=True
-        # )
-        # sequence_frame.visualize(f"{result_dir}/parquets/{chunk_number}/graph.png")
         sequence_frame.to_parquet(
-            f"{result_dir}/parquets/{chunk_number}",
+            f"{result_dir}/parquets/{gene}",
             compression="snappy",
             engine="pyarrow",
             compute=True,
@@ -57,11 +41,9 @@ def extractor_main(sequence_frame, ntp_barcode, logger, result_dir, chunk_number
             write_metadata_file=True,
         )
         end_time = time.time()
-        ic(
-            f"Barcode extraction finished...{chunk_number} in {end_time-start_time} seconds"
-        )
+        ic(f"Barcode extraction finished...{gene} in {end_time-start_time} seconds")
 
-        return f"{result_dir}/parquets/{chunk_number}"
+        return f"{result_dir}/parquets/{gene}"
 
     except Exception as e:
         ic(e)
