@@ -4,29 +4,50 @@ import pathlib
 import subprocess as sp
 import sys
 import traceback
+from datetime import datetime
 from types import SimpleNamespace
 
 from psutil import cpu_count
 
+DEBUGGING = False
 N_PHYSICAL_CORES = cpu_count(logical=False)
 
 os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
-import pandas as pd
-from dask import config as dcf
-from dask import dataframe as dd
-
-dcf.set({"dataframe.query-planning": False})
 import ctypes
 
+import dask
+import pandas as pd
 from dask import bag as db
+from dask import dataframe as dd
 from dask.distributed import Client, LocalCluster
 from icecream import ic
 from tqdm import tqdm
+
+dask.config.set(
+    {
+        "dataframe.convert-string": True,
+    }
+)
+
+
+def time_format():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+ic.configureOutput(prefix=f"{time_format()} | ")
+ic.configureOutput(includeContext=True)
 
 
 def trim_memory() -> int:
     libc = ctypes.CDLL("libc.so.6")
     return libc.malloc_trim(0)
+
+
+def create_columns(df, barcode_df):
+    series_dict = {}
+    for gene in barcode_df["Gene"]:
+        series_dict[gene] = False
+    return df.assign(**series_dict)
 
 
 def finalize(
@@ -51,6 +72,99 @@ def finalize(
     except Exception as e:
         ic(e)
         return -1
+
+
+async def downstream_task(
+    ddf,
+    args,
+    sample,
+    barcode_path,
+    barcode_df,
+):
+
+    pass
+    # ic("Downstream task started...")
+    # result_full_mat = save_as_parquet(
+    #     ddf,
+    #     f"{args.system_structure.full_mat_dir}",
+    # )
+
+    # result_full_mat = await future_result_full_mat
+    # result_full_mat = await client.gather(future_result_full_mat, asynchronous=True)
+    # result_summary = get_readcount_table(
+    #     ddf,
+    #     args=args,
+    #     sample=sample,
+    #     barcode_path=barcode_path,
+    #     barcode_df=barcode_df,
+    # )
+
+    # # # TODO: Indel analysis using the full matrix
+    # # indel_analysis()
+
+    # ic(result_full_mat)
+    # ic(await result_summary)
+
+    # return 0
+
+
+def filter_ambiguous_reads(ddf):
+    ddf = ddf.drop(columns=["Sequence"])
+
+    ic("Remove ambiguous reads...")
+    ddf = ddf.set_index("ID")
+    ddf["ambiguity"] = ddf.sum(axis=1)
+
+    ddf = ddf[(ddf["ambiguity"] <= 2) & (ddf["ambiguity"] > 0)]
+
+    ddf = ddf.drop(columns=["ambiguity"])
+
+    return ddf.sum(axis=0).to_frame()
+
+
+def get_readcount_table(
+    args,
+    sample,
+    barcode_path,
+    barcode_df,
+):
+    try:
+        ic("Finalizing extraction...")
+        delayed_combined_extraction_datasets = dask.delayed(dd.read_parquet)(
+            args.system_structure.full_mat_dir, split_row_groups=True
+        )
+
+        delayed_filtered_combined_extraction_datasets = dask.delayed(
+            filter_ambiguous_reads
+        )(delayed_combined_extraction_datasets)
+
+        combined_extraction_datasets = (
+            delayed_filtered_combined_extraction_datasets.compute()
+        )  # Data is small enough at this time
+        combined_extraction_datasets.index.name = "Gene"
+        combined_extraction_datasets.columns = ["Reads"]
+
+        combined_extraction_datasets = (
+            combined_extraction_datasets.compute()
+            .join(
+                barcode_df.set_index("Gene"),
+                how="outer",
+            )
+            .fillna(0)
+        )
+
+        combined_extraction_datasets.to_csv(
+            f"{args.system_structure.result_dir}/read_counts.csv",
+            sep=",",
+            header=True,
+            index=True,
+        )
+
+        ic(f"{sample}+{barcode_path}: Final read count table was generated.")
+        return 0
+    except Exception as e:
+        ic(e)
+        return -2
 
 
 class Helper(object):
@@ -173,16 +287,17 @@ class SystemStructure(object):
         )
         self.result_dir = Helper.mkdir_if_not(self.output_sample_organizer[sample_name])
         self.parquet_dir = Helper.mkdir_if_not(self.result_dir / "parquets")
-        # self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
+        self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
 
         if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
-            sp.run(
-                [
-                    "rm",
-                    "-r",
-                    f"{self.result_dir / 'parquets'}",
-                ]
-            )
+            if not DEBUGGING:
+                sp.run(
+                    [
+                        "rm",
+                        "-r",
+                        f"{self.result_dir / 'parquets'}",
+                    ]
+                )
             self.parquet_dir = Helper.mkdir_if_not(
                 self.result_dir / "parquets"
             )  # Re-create the directory
@@ -288,7 +403,7 @@ def system_struct_checker(func):
 def run_pipeline(args: SimpleNamespace) -> None:
     # TODO: add parquet remove option
 
-    from Core.extractor import extractor_main as extractor_main
+    from Core.extractor import extractor_main
 
     ic("Initilaizing local cluster...")
 
@@ -296,23 +411,24 @@ def run_pipeline(args: SimpleNamespace) -> None:
         processes=True,
         n_workers=N_PHYSICAL_CORES,  # DEBUG
         threads_per_worker=2,
-        memory_limit="4GiB",
+        # memory_limit="4GiB",
         dashboard_address=":40928",
+        local_directory="./temp",
     )
-    client = Client(cluster, timeout="2s")
+    client = Client(cluster)
     client.amm.start()
 
     ic(client)
     ic(client.dashboard_link)
 
-    for sample, barcode in tqdm(args.samples):
+    for sample, barcode_path in tqdm(args.samples):
         ExtractorRunner(
-            sample, barcode, args
+            sample, barcode_path, args
         )  # TODO: refactor its usage to avoid creating an object
 
         ic("Loading merged fastq file...")
         bag = db.read_text(
-            args.system_structure.input_file_organizer[sample], blocksize="100MB"
+            args.system_structure.input_file_organizer[sample], blocksize="1MiB"
         )
         sequence_ddf = bag.to_dataframe()
 
@@ -323,9 +439,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
         )
-        sequence_ddf = sequence_ddf.drop(columns=["Separator", "Quality"]).repartition(
-            "100MB"
-        )  # drop quality sequence
+        sequence_ddf = sequence_ddf.drop(columns=["Separator"]).set_index("ID")
 
         ic("Save raw NGS reads as parquets...")
         sequence_ddf.to_parquet(
@@ -342,26 +456,41 @@ def run_pipeline(args: SimpleNamespace) -> None:
             engine="pyarrow",
             calculate_divisions=True,
         )
+        ic(sequence_ddf.npartitions)
+
         # Load barcode file
         ic("Loading barcode file...")
         barcode_df = pd.read_csv(
-            barcode,
+            barcode_path,
             sep=args.sep,
             header=None,
-            names=["Gene", "Barcode"],
+        ).fillna("")
+        barcode_df.columns = ["Gene"] + [
+            f"Barcode_{i}" for i in range(1, len(barcode_df.columns))
+        ]
+        barcode_df.loc[:, ["Barcode" in col for col in barcode_df.columns]].transform(
+            lambda x: x.str.upper()
         )
-        ic("Submitting extraction process...")
 
-        rval = sequence_ddf.map_partitions(
-            extractor_main,
-            barcode=barcode_df.iloc[
-                :, [0, 1]
-            ].dropna(),  # Use only Gene and Barcode columns
-            logger=args.logger,
-            result_dir=args.system_structure.result_dir,
-            sep=args.sep,
+        ic("Extend sequence dataframe...")
+        # Append the barcode columns to the dataframe
+        sequence_ddf = sequence_ddf.map_partitions(
+            create_columns,
+            barcode_df=barcode_df,
         )
-        rval.visualize(f"{args.system_structure.result_dir}/extractor_main.png")
+
+        if not DEBUGGING:
+            ic("Submitting extraction process...")
+
+            rval = sequence_ddf.map_partitions(
+                extractor_main,
+                barcode=barcode_df,
+                logger=args.logger,
+                result_dir=args.system_structure.result_dir,
+                sep=args.sep,
+                meta=sequence_ddf._meta,
+            )
+            rval.visualize(f"{args.system_structure.result_dir}/extractor_main.png")
 
         # Triggers copmute of the dataframe
         # rval.to_parquet(
