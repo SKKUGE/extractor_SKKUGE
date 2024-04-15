@@ -1,3 +1,4 @@
+import concurrent
 import os
 import pathlib
 import subprocess as sp
@@ -37,21 +38,13 @@ def time_format():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-ic.configureOutput(prefix=f"{time_format()} | ")
+ic.configureOutput(prefix=f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | ")
 ic.configureOutput(includeContext=True)
 
 
 def trim_memory() -> int:
     libc = ctypes.CDLL("libc.so.6")
     return libc.malloc_trim(0)
-
-
-# async def save_as_parquet(lzdf, path):
-#     ic("Save joined results as parquets...")
-#     lzdf.collect().write_parquet(path, use_pyarrow=True)
-#     # pdf = lzdf.collect(streaming=True)
-#     # pdf.sink_parquet(path)
-#     return 0
 
 
 def indel_analysis():
@@ -61,49 +54,123 @@ def indel_analysis():
     return 0
 
 
-def binary_tree_merge(dataframes):
-    if len(dataframes) == 1:
-        return dataframes[0]
-    mid = len(dataframes) // 2
-    left = binary_tree_merge(dataframes[:mid])
-    right = binary_tree_merge(dataframes[mid:])
-    return left.join(right, on="ID", how="outer_coalesce")
+def filter_parquets(args, rvals, sequence_df_parquet_path, client):
+    def _filter_and_save_as_parquet(dataframe, mask, path):
+        try:
+            # truthy_mask = dataframe == True
+            dataframe = dataframe.loc[~mask, :]  # Drop ambiguous reads
+            # dataframe = dataframe.where(
+            #     truthy_mask, np.nan
+            # )  # Reduce sparsity by filtering out zero values
+            # dataframe = dataframe.dropna()
 
-
-def merge_parquets(
-    args,
-    rvals,
-    sequence_df_parquet_path,
-):
-    try:
-        ic("Merging parquet files...")
-
-        all_extraction_delayed_datasts = []
-        for file in rvals:
-            lazy_fragmented_parquets = pl.scan_parquet(
-                f"{file}/*.parquet",
+            dataframe.to_parquet(
+                path,  # filtered parquets TODO: rename this variable
+                engine="pyarrow",
+                write_index=True,
+                write_metadata_file=True,
+                compute=True,
             )
-            all_extraction_delayed_datasts.append(lazy_fragmented_parquets)
 
-        lazy_combined_extraction_datasets = binary_tree_merge(
-            all_extraction_delayed_datasts
-        )  # Recursion depth error
+            return 0
 
-        lazy_combined_extraction_datasets = (
-            lazy_combined_extraction_datasets.join(
-                pl.scan_parquet(sequence_df_parquet_path), on="ID", how="outer_coalesce"
-            ).fill_null(False)
-            # .fill_nan(False)
+        except Exception as e:
+            ic(e)
+            return -4
+
+    def _converting_read_counts_to_vectors(x):
+        return (
+            x[x.columns[0]].squeeze().astype(int)
+        )  # Assumption: only one column at a time
+
+    def chunk_into_n(lst, n):
+        from math import ceil
+
+        size = ceil(len(lst) / n)
+        return list(map(lambda x: lst[x * size : x * size + size], list(range(n))))
+
+    def _custom_sum(svecs: list):
+        if len(svecs) == 0:
+            return dd.from_dask_array([])
+        ic("Summing up read counts...")
+        ic(len(svecs) - 1)
+        pbar = tqdm(total=len(svecs) - 1)
+        stack = svecs.copy()
+        while len(stack) > 1:
+            left = stack.pop()
+            right = stack.pop()
+            stack.append(left.add(right))
+            pbar.update(len(svecs) - len(stack) - 1)
+
+        pbar.close()
+        return stack[0].persist()
+
+    try:
+        ic("Loading raw extraction parquet files...")
+
+        lazy_all_extraction_datasets = []
+        for file in rvals:
+            fragmented_parquets = dask.delayed(dd.read_parquet)(
+                f"{file}/*.parquet",
+                split_row_groups=True,
+                calculate_divisions=True,
+            )
+
+            lazy_all_extraction_datasets.append(fragmented_parquets)
+
+        ic("Loading parquet files...")
+        all_extraction_datasets = dask.compute(*lazy_all_extraction_datasets)
+
+        ic("Converting read counts to vectors...")
+        future_all_count_vectors = []
+        for x in tqdm(all_extraction_datasets):
+            future_all_count_vectors.append(
+                client.submit(_converting_read_counts_to_vectors, x)
+            )
+
+        all_count_vectors = client.gather(future_all_count_vectors)
+        ic("Summing up the read counts to determine ambiguous reads...")
+        futures_summed_series = []
+        for vector_chunk in chunk_into_n(all_count_vectors, N_PHYSICAL_CORES):
+            f = client.submit(
+                _custom_sum,
+                vector_chunk,
+            )
+            futures_summed_series.append(f)
+
+        ic("Gathering merged read counts to determine ambiguous reads...")
+        summed_series = sum(client.gather(futures_summed_series))
+        summed_frame = summed_series.to_frame(name=0)
+
+        summed_frame["Ambiguity"] = False
+        summed_frame["Ambiguity"] = summed_frame["Ambiguity"].mask(
+            (summed_frame[0] > 2), True
         )
+        ambiguity_mask = summed_frame["Ambiguity"]
+        ambiguity_mask = ambiguity_mask.persist()
 
-        ic("Save as parquet...")
-        lazy_combined_extraction_datasets.collect().write_parquet(
-            f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
-            compression="snappy",
-            # use_pyarrow=True,
-            row_group_size=2**5,
-        )
-        return 0
+        # Filtering based on the sum of the read counts
+        ic("Filtering ambiguous reads...")
+        ic("Submitting calculations...")
+        paths = []
+        futures = []
+        for dataframe in tqdm(all_extraction_datasets):
+            futures.append(
+                client.submit(
+                    _filter_and_save_as_parquet,
+                    dataframe,
+                    ambiguity_mask,
+                    f"{args.system_structure.full_mat_dir}/{dataframe.columns[0]}",
+                )
+            )
+            paths.append(f"{args.system_structure.full_mat_dir}/{dataframe.columns[0]}")
+
+        rvals = client.gather(futures)
+        if -4 in rvals:
+            ic("Error in filtering, check the log file")
+            raise Exception("Error in filtering, check the log file")
+
+        return paths
 
     except FileNotFoundError as e:
         ic(e)
@@ -115,84 +182,58 @@ def merge_parquets(
         return -1
 
 
-async def downstream_task(
-    ddf,
-    args,
-    sample,
-    barcode_path,
-    barcode_df,
-):
-
-    pass
-    # ic("Downstream task started...")
-    # result_full_mat = save_as_parquet(
-    #     ddf,
-    #     f"{args.system_structure.full_mat_dir}",
-    # )
-
-    # result_full_mat = await future_result_full_mat
-    # result_full_mat = await client.gather(future_result_full_mat, asynchronous=True)
-    # result_summary = get_readcount_table(
-    #     ddf,
-    #     args=args,
-    #     sample=sample,
-    #     barcode_path=barcode_path,
-    #     barcode_df=barcode_df,
-    # )
-
-    # # # TODO: Indel analysis using the full matrix
-    # # indel_analysis()
-
-    # ic(result_full_mat)
-    # ic(await result_summary)
-
-    # return 0
-
-
-def filter_ambiguous_reads(ddf):
-    ddf = ddf.drop(columns=["Sequence"])
-
-    ic("Remove ambiguous reads...")
-    ddf = ddf.set_index("ID")
-    ddf["ambiguity"] = ddf.sum(axis=1)
-
-    ddf = ddf[(ddf["ambiguity"] <= 2) & (ddf["ambiguity"] > 0)]
-
-    ddf = ddf.drop(columns=["ambiguity"])
-
-    return ddf.sum(axis=0).to_frame()
-
-
 def get_readcount_table(
     args,
     sample,
+    splitted_read_count_table_paths,
     barcode_path,
     barcode_df,
+    client,
 ):
+
     try:
-        ic("Finalizing extraction...")
-        delayed_combined_extraction_datasets = dask.delayed(dd.read_parquet)(
-            args.system_structure.full_mat_dir, split_row_groups=True
+        ic("Pooling filtered parquet files...")
+        lazy_all_extraction_datasets = []
+        for file in splitted_read_count_table_paths:
+            fragmented_parquets = dask.delayed(dd.read_parquet)(
+                f"{file}/*.parquet",
+                split_row_groups=True,
+                calculate_divisions=True,
+            )
+
+            lazy_all_extraction_datasets.append(fragmented_parquets)
+
+        ic("Lazily loading parquet files...")
+        all_filtered_extraction_datasets = dask.compute(*lazy_all_extraction_datasets)
+
+        future_summed_scalars = []
+        ic("Summing up each gene's read counts")
+        for dataframe in all_filtered_extraction_datasets:
+            future_summed_scalars.append(client.submit(dataframe.sum, axis=0))
+
+        summed_scalars = client.gather(future_summed_scalars)
+
+        ic("Merging the read counts...")
+
+        future_extraction_scalars = []
+        for scalar in summed_scalars:
+
+            f = client.submit(dask.compute, scalar)
+            future_extraction_scalars.append(f)
+
+        extraction_scalars = client.gather(future_extraction_scalars)
+        combined_extraction_datasets = pd.concat(
+            [x[0].to_frame() for x in extraction_scalars],
+            axis=0,
         )
 
-        delayed_filtered_combined_extraction_datasets = dask.delayed(
-            filter_ambiguous_reads
-        )(delayed_combined_extraction_datasets)
-
-        combined_extraction_datasets = (
-            delayed_filtered_combined_extraction_datasets.compute()
-        )  # Data is small enough at this time
         combined_extraction_datasets.index.name = "Gene"
         combined_extraction_datasets.columns = ["Reads"]
 
-        combined_extraction_datasets = (
-            combined_extraction_datasets.compute()
-            .join(
-                barcode_df.set_index("Gene"),
-                how="outer",
-            )
-            .fillna(0)
-        )
+        combined_extraction_datasets = combined_extraction_datasets.join(
+            barcode_df.set_index("Gene"),
+            how="outer",
+        ).fillna(0)
 
         combined_extraction_datasets.to_csv(
             f"{args.system_structure.result_dir}/read_counts.csv",
@@ -330,6 +371,7 @@ class SystemStructure(object):
         self.parquet_dir = Helper.mkdir_if_not(self.result_dir / "parquets")
         self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
 
+        # Check if the result parquet directory is empty
         if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
             if not DEBUGGING:
                 sp.run(
@@ -341,6 +383,20 @@ class SystemStructure(object):
                 )
             self.parquet_dir = Helper.mkdir_if_not(
                 self.result_dir / "parquets"
+            )  # Re-create the directory
+
+        # Check if the filtered parquet directory is empty
+        if len(os.listdir(f"{pathlib.Path.cwd() / self.full_mat_dir}")) > 0:
+            if not DEBUGGING:
+                sp.run(
+                    [
+                        "rm",
+                        "-r",
+                        f"{self.result_dir / 'parquets'}",
+                    ]
+                )
+            self.full_mat_dir = Helper.mkdir_if_not(
+                self.result_dir / "full_matrix"
             )  # Re-create the directory
 
 
@@ -442,8 +498,6 @@ def system_struct_checker(func):
 
 @system_struct_checker
 def run_pipeline(args: SimpleNamespace) -> None:
-    # TODO: add parquet remove option
-
     from Core.extractor import extractor_main
 
     ic("Initilaizing local cluster...")
@@ -452,7 +506,6 @@ def run_pipeline(args: SimpleNamespace) -> None:
         processes=True,
         n_workers=N_PHYSICAL_CORES,  # DEBUG
         threads_per_worker=2,
-        # memory_limit="6GiB",
         dashboard_address=":40928",
         local_directory="./temp",
     )
@@ -462,140 +515,128 @@ def run_pipeline(args: SimpleNamespace) -> None:
     ic(client)
     ic(client.dashboard_link)
 
-    # loop = asyncio.new_event_loop()
-    # asyncio.set_event_loop(loop)
-    # coroutine_futures = []
-
     for sample, barcode_path in tqdm(args.samples):
         ExtractorRunner(
             sample, barcode_path, args
         )  # TODO: refactor its usage to avoid creating an object
-
-        ic("Loading merged fastq file...")
-        bag = db.read_text(
-            args.system_structure.input_file_organizer[sample], blocksize="100MiB"
-        )
-        sequence_ddf = bag.to_dataframe()
-        sequence_ddf = (
-            sequence_ddf.to_dask_array(lengths=True)
-            .reshape(-1, 4)
-            .to_dask_dataframe(
-                columns=["ID", "Sequence", "Separator", "Quality"],
-            )
-        )
-        sequence_ddf = sequence_ddf.drop(columns=["Separator", "Quality"]).set_index(
-            "ID"
-        )  # drop quality sequence
-
-        ic("Save NGS reads as parquets...")
-        sequence_ddf.to_parquet(
-            f"{args.system_structure.seq_split_dir}",
-            # engine="pyarrow",
-            compute=True,
-        )
-        del bag
-
-        ic("Parquet generation completed, load parquets")
-        sequence_ddf = dd.read_parquet(
-            f"{args.system_structure.seq_split_dir}",
-            # engine="pyarrow",
-            calculate_divisions=True,
-        )
-        ic(sequence_ddf.npartitions)
-
-        # Load barcode file
-        # The barcode writing rule: 1st-column should be name, and the others are n substrings for joint matching
-        ic("Loading barcode file...")
-        barcode_df = pd.read_csv(
-            barcode_path,
-            sep=args.sep,
-            header=None,
-        ).fillna("")
-        barcode_df.columns = ["Gene"] + [
-            f"Barcode_{i}" for i in range(1, len(barcode_df.columns))
-        ]
-        barcode_df.loc[:, ["Barcode" in col for col in barcode_df.columns]].transform(
-            lambda x: x.str.upper()
-        )
-
-        if not DEBUGGING:
-            ic("Pooling queries...")
-            futures = []
-            for i, ntp_barcode in tqdm(enumerate(barcode_df.itertuples())):
-                f = client.submit(
-                    extractor_main,
-                    sequence_ddf,
-                    ntp_barcode,
-                    args.logger,
-                    args.system_structure.result_dir,
-                    i,
-                )
-                futures.append(f)
-            rvals = client.gather(futures)
-            # client.run(trim_memory)
-        else:
-            rvals = [
-                f"{args.system_structure.result_dir}/parquets/{p}"
-                for p in os.listdir(f"{args.system_structure.result_dir}/parquets")
-            ]
-
-        if -1 in rvals:
-            ic("Error in extraction, check the log file")
-            raise Exception("Error in extraction, check the log file")
-        else:
+        while True:
             try:
-                # BUG: it blocks processing
-                # Asynchronous read count table generation and indel analysis
-                ic("Joining extraction results...")
-                # Read parquets and join them by polars
-                # if not DEBUGGING:
-                if (
-                    merge_parquets(
-                        args,
-                        rvals,
-                        f"{args.system_structure.seq_split_dir}/*.parquet",
-                    )
-                    == -1
-                ):
-                    ic("Error in merging parquets")
-                    raise Exception("Error in merging parquets")
 
-                del sequence_ddf, rvals
-
-                # downstream_task() # TODO: Refactor this part below to the function
-                # save_full_mat_task = loop.create_task(
-                #     save_as_parquet(
-                #         lazy_combined_extraction_datasets.clone(),
-                #         f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
-                #     )
-                # )
-                # coroutine_futures.append(save_full_mat_task)
-                # save_full_mat_task.add_done_callback(coroutine_futures.remove)
-                get_readcount_table(
-                    args=args,
-                    sample=sample,
-                    barcode_path=barcode_path,
-                    barcode_df=barcode_df,
+                ic("Loading merged fastq file...")
+                bag = db.read_text(
+                    args.system_structure.input_file_organizer[sample],
+                    blocksize="100MiB",
                 )
+                sequence_ddf = bag.to_dataframe()
+                sequence_ddf = (
+                    sequence_ddf.to_dask_array(lengths=True)
+                    .reshape(-1, 4)
+                    .to_dask_dataframe(
+                        columns=["ID", "Sequence", "Separator", "Quality"],
+                    )
+                )
+                sequence_ddf = sequence_ddf.drop(columns=["Separator"]).set_index("ID")
 
-                # read_count_summary_task = loop.create_task(
-                #     get_readcount_table(
-                #         args=args,
-                #         sample=sample,
-                #         barcode_path=barcode_path,
-                #         barcode_df=barcode_df,
-                #     )
-                # )
-                # coroutine_futures.append(read_count_summary_task)
-                # read_count_summary_task.add_done_callback(coroutine_futures.remove)
+                ic("Save NGS reads as parquets...")
+                sequence_ddf.to_parquet(
+                    f"{args.system_structure.seq_split_dir}",
+                    compute=True,
+                )
+                del bag
 
-                # TODO: Indel analysis using the full matrix
-                indel_analysis()
+                ic("Parquet generation completed, load parquets")
+                sequence_ddf = dd.read_parquet(
+                    f"{args.system_structure.seq_split_dir}",
+                    calculate_divisions=True,
+                )
+                ic(sequence_ddf.npartitions)
+
+                # Load barcode file
+                # The barcode writing rule: 1st-column should be name, and the others are n substrings for joint matching
+                ic("Loading barcode file...")
+                barcode_df = pd.read_csv(
+                    barcode_path,
+                    sep=args.sep,
+                    header=None,
+                ).fillna("")
+                barcode_df.columns = ["Gene"] + [
+                    f"Barcode_{i}" for i in range(1, len(barcode_df.columns))
+                ]
+
+                # TODO: Gene uniqueness test
+                if not barcode_df["Gene"].is_unique:
+                    ic("Gene names are not unique")
+                    ic(barcode_df["Gene"].duplicated())
+                    ic("Drop duplicated gene names...")
+                    barcode_df = barcode_df.drop_duplicates(subset="Gene")
+
+                barcode_df.loc[
+                    :, ["Barcode" in col for col in barcode_df.columns]
+                ].transform(lambda x: x.str.upper())
+
+                if not DEBUGGING:
+                    ic("Pooling queries...")
+                    futures = []
+                    for ntp_barcode in tqdm(barcode_df.itertuples()):
+                        f = client.submit(
+                            extractor_main,
+                            sequence_ddf,
+                            ntp_barcode,
+                            args.logger,
+                            args.system_structure.result_dir,
+                        )
+                        futures.append(f)
+                    rvals = client.gather(futures)
+
+                else:
+                    rvals = [
+                        f"{args.system_structure.result_dir}/parquets/{p}"
+                        for p in os.listdir(
+                            f"{args.system_structure.result_dir}/parquets"
+                        )
+                    ]
+
+                if -1 in rvals:
+                    ic("Error in extraction, check the log file")
+                    raise Exception("Error in extraction, check the log file")
+                else:
+                    try:
+                        ic("Joining extraction results...")
+
+                        filtered_df_paths = filter_parquets(
+                            args,
+                            rvals,
+                            f"{args.system_structure.seq_split_dir}/*.parquet",
+                            client,
+                        )
+
+                        del sequence_ddf, rvals
+
+                        get_readcount_table(
+                            args=args,
+                            sample=sample,
+                            splitted_read_count_table_paths=filtered_df_paths,
+                            barcode_path=barcode_path,
+                            barcode_df=barcode_df,
+                            client=client,
+                        )
+
+                        # TODO: Indel analysis using the full matrix
+                        indel_analysis()
+                    except Exception as e:
+                        ic("Downstream task failed, check the log file")
+                        ic(e)
+                        ic(traceback.format_exc())
+
+                client.run(trim_memory)
+                break  # Exit the loop
+            except concurrent.futures._base.CancelledError:
+                ic(f"Cancelled Error: {sample}, retrying...")
             except Exception as e:
-                ic("Downstream task failed, check the log file")
                 ic(e)
                 ic(traceback.format_exc())
-
-    # loop.run_until_complete(asyncio.gather(*coroutine_futures))
+                args.logger.error(e)
+                raise e
 
     ic("All merging jobs finished...")
+    # client.close()
