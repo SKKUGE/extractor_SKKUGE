@@ -17,10 +17,6 @@ from icecream import ic
 def extractor_main(sequence_frame, ntp_barcode, logger, result_dir, chunk_number=0):
     start_time = time.time()
     try:
-        if chunk_number is None:
-            raise ValueError("chunk_number is not defined")
-
-        # ic(f"Barcode extraction initiated...{chunk_number}")
 
         gene = ntp_barcode.Gene
         barcodes = [
@@ -31,26 +27,18 @@ def extractor_main(sequence_frame, ntp_barcode, logger, result_dir, chunk_number
 
         query_result = sequence_frame["Sequence"].str.contains(
             ".*".join(barcodes), regex=True  # Xarr optimization needed
-        )
-        # query_result = (
-        #     [  # TODO : This part should be optimized with n-dimensional array (Xarr)
-        #         sequence_frame["Sequence"].str.contains(str(barcode), regex=False)
-        #         for barcode in barcodes
-        #     ]
-        # )
+        )  # TODO : This part should be optimized with n-dimensional array (Xarr)
 
         sequence_frame = sequence_frame.drop(columns=["Sequence"])
         sequence_frame[gene] = query_result
-        # sequence_frame[gene] = True
-        # for q in query_result:
-        #     sequence_frame[gene] &= q
-
+        sequence_frame = sequence_frame[sequence_frame[gene] == True]
         sequence_frame.to_parquet(
             f"{result_dir}/parquets/{chunk_number}",
             compression="snappy",
             engine="pyarrow",
             compute=True,
             write_index=True,
+            write_metadata_file=True,
         )
         end_time = time.time()
         ic(

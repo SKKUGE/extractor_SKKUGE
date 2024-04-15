@@ -1,9 +1,9 @@
-import asyncio
 import os
 import pathlib
 import subprocess as sp
 import sys
 import traceback
+from datetime import datetime
 from types import SimpleNamespace
 
 from psutil import cpu_count
@@ -16,6 +16,7 @@ os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
 
 import ctypes
 
+import dask
 import pandas as pd
 import polars as pl
 from dask import bag as db
@@ -24,16 +25,33 @@ from dask.distributed import Client, LocalCluster
 from icecream import ic
 from tqdm import tqdm
 
+pl.Config.set_streaming_chunk_size(1024)
+dask.config.set(
+    {
+        "dataframe.convert-string": True,
+    }
+)
+
+
+def time_format():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+ic.configureOutput(prefix=f"{time_format()} | ")
+ic.configureOutput(includeContext=True)
+
 
 def trim_memory() -> int:
     libc = ctypes.CDLL("libc.so.6")
     return libc.malloc_trim(0)
 
 
-async def save_as_parquet(lzdf, path):
-    ic("Save joined results as parquets...")
-    lzdf.sink_parquet(path=path)
-    return 0
+# async def save_as_parquet(lzdf, path):
+#     ic("Save joined results as parquets...")
+#     lzdf.collect().write_parquet(path, use_pyarrow=True)
+#     # pdf = lzdf.collect(streaming=True)
+#     # pdf.sink_parquet(path)
+#     return 0
 
 
 def indel_analysis():
@@ -49,7 +67,7 @@ def binary_tree_merge(dataframes):
     mid = len(dataframes) // 2
     left = binary_tree_merge(dataframes[:mid])
     right = binary_tree_merge(dataframes[mid:])
-    return left.join(right, on="ID", how="outer").drop("ID_right")
+    return left.join(right, on="ID", how="outer_coalesce")
 
 
 def merge_parquets(
@@ -69,17 +87,23 @@ def merge_parquets(
 
         lazy_combined_extraction_datasets = binary_tree_merge(
             all_extraction_delayed_datasts
+        )  # Recursion depth error
+
+        lazy_combined_extraction_datasets = (
+            lazy_combined_extraction_datasets.join(
+                pl.scan_parquet(sequence_df_parquet_path), on="ID", how="outer_coalesce"
+            ).fill_null(False)
+            # .fill_nan(False)
         )
 
-        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.join(
-            pl.scan_parquet(sequence_df_parquet_path), on="ID", how="outer"
-        ).fill_null(False)
-        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.drop("ID")
-        lazy_combined_extraction_datasets = lazy_combined_extraction_datasets.rename(
-            {"ID_right": "ID"}
+        ic("Save as parquet...")
+        lazy_combined_extraction_datasets.collect().write_parquet(
+            f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
+            compression="snappy",
+            # use_pyarrow=True,
+            row_group_size=2**5,
         )
-
-        return lazy_combined_extraction_datasets
+        return 0
 
     except FileNotFoundError as e:
         ic(e)
@@ -91,27 +115,55 @@ def merge_parquets(
         return -1
 
 
-async def get_read_count_table(lzdf):
-    lzdf = lzdf.drop(columns=["Sequence"])
+async def downstream_task(
+    ddf,
+    args,
+    sample,
+    barcode_path,
+    barcode_df,
+):
+
+    pass
+    # ic("Downstream task started...")
+    # result_full_mat = save_as_parquet(
+    #     ddf,
+    #     f"{args.system_structure.full_mat_dir}",
+    # )
+
+    # result_full_mat = await future_result_full_mat
+    # result_full_mat = await client.gather(future_result_full_mat, asynchronous=True)
+    # result_summary = get_readcount_table(
+    #     ddf,
+    #     args=args,
+    #     sample=sample,
+    #     barcode_path=barcode_path,
+    #     barcode_df=barcode_df,
+    # )
+
+    # # # TODO: Indel analysis using the full matrix
+    # # indel_analysis()
+
+    # ic(result_full_mat)
+    # ic(await result_summary)
+
+    # return 0
+
+
+def filter_ambiguous_reads(ddf):
+    ddf = ddf.drop(columns=["Sequence"])
 
     ic("Remove ambiguous reads...")
-    lzdf = lzdf.with_columns(
-        ambiguity=pl.sum_horizontal(*lzdf.select(pl.exclude("ID")).columns)
-    )
+    ddf = ddf.set_index("ID")
+    ddf["ambiguity"] = ddf.sum(axis=1)
 
-    lzdf = lzdf.filter(pl.col("ambiguity") <= 2)  # Remove ambiguous sequences
-    lzdf = lzdf.drop("ambiguity", "ID")
+    ddf = ddf[(ddf["ambiguity"] <= 2) & (ddf["ambiguity"] > 0)]
 
-    ic("Calculating read counts...")
-    lzdf = lzdf.sum()
+    ddf = ddf.drop(columns=["ambiguity"])
 
-    lzdf = lzdf.collect_async(streaming=True)
-
-    return await lzdf
+    return ddf.sum(axis=0).to_frame()
 
 
-async def get_readcount_table(
-    lazy_combined_extraction_datasets,
+def get_readcount_table(
     args,
     sample,
     barcode_path,
@@ -119,20 +171,28 @@ async def get_readcount_table(
 ):
     try:
         ic("Finalizing extraction...")
-        # raw_sequences = combined_extraction_datasets["Sequence"]
-
-        lazy_combined_extraction_datasets = await get_read_count_table(
-            lazy_combined_extraction_datasets
+        delayed_combined_extraction_datasets = dask.delayed(dd.read_parquet)(
+            args.system_structure.full_mat_dir, split_row_groups=True
         )
 
-        combined_extraction_datasets = lazy_combined_extraction_datasets.to_pandas().T
+        delayed_filtered_combined_extraction_datasets = dask.delayed(
+            filter_ambiguous_reads
+        )(delayed_combined_extraction_datasets)
+
+        combined_extraction_datasets = (
+            delayed_filtered_combined_extraction_datasets.compute()
+        )  # Data is small enough at this time
         combined_extraction_datasets.index.name = "Gene"
         combined_extraction_datasets.columns = ["Reads"]
 
-        combined_extraction_datasets = combined_extraction_datasets.join(
-            barcode_df.set_index("Gene"),
-            how="outer",
-        ).fillna(0)
+        combined_extraction_datasets = (
+            combined_extraction_datasets.compute()
+            .join(
+                barcode_df.set_index("Gene"),
+                how="outer",
+            )
+            .fillna(0)
+        )
 
         combined_extraction_datasets.to_csv(
             f"{args.system_structure.result_dir}/read_counts.csv",
@@ -142,7 +202,6 @@ async def get_readcount_table(
         )
 
         ic(f"{sample}+{barcode_path}: Final read count table was generated.")
-
         return 0
     except Exception as e:
         ic(e)
@@ -393,8 +452,9 @@ def run_pipeline(args: SimpleNamespace) -> None:
         processes=True,
         n_workers=N_PHYSICAL_CORES,  # DEBUG
         threads_per_worker=2,
-        memory_limit="6GiB",
+        # memory_limit="6GiB",
         dashboard_address=":40928",
+        local_directory="./temp",
     )
     client = Client(cluster)
     client.amm.start()
@@ -402,9 +462,9 @@ def run_pipeline(args: SimpleNamespace) -> None:
     ic(client)
     ic(client.dashboard_link)
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    coroutine_futures = []
+    # loop = asyncio.new_event_loop()
+    # asyncio.set_event_loop(loop)
+    # coroutine_futures = []
 
     for sample, barcode_path in tqdm(args.samples):
         ExtractorRunner(
@@ -430,7 +490,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ic("Save NGS reads as parquets...")
         sequence_ddf.to_parquet(
             f"{args.system_structure.seq_split_dir}",
-            engine="pyarrow",
+            # engine="pyarrow",
             compute=True,
         )
         del bag
@@ -438,7 +498,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ic("Parquet generation completed, load parquets")
         sequence_ddf = dd.read_parquet(
             f"{args.system_structure.seq_split_dir}",
-            engine="pyarrow",
+            # engine="pyarrow",
             calculate_divisions=True,
         )
         ic(sequence_ddf.npartitions)
@@ -488,48 +548,46 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 # Asynchronous read count table generation and indel analysis
                 ic("Joining extraction results...")
                 # Read parquets and join them by polars
-                lazy_combined_extraction_datasets = merge_parquets(
-                    args,
-                    rvals,
-                    f"{args.system_structure.seq_split_dir}/*.parquet",
-                )
+                # if not DEBUGGING:
+                if (
+                    merge_parquets(
+                        args,
+                        rvals,
+                        f"{args.system_structure.seq_split_dir}/*.parquet",
+                    )
+                    == -1
+                ):
+                    ic("Error in merging parquets")
+                    raise Exception("Error in merging parquets")
+
                 del sequence_ddf, rvals
 
-                read_count_summary_task = asyncio.ensure_future(
-                    get_readcount_table(
-                        lazy_combined_extraction_datasets,
-                        args=args,
-                        sample=sample,
-                        barcode_path=barcode_path,
-                        barcode_df=barcode_df,
-                    )
+                # downstream_task() # TODO: Refactor this part below to the function
+                # save_full_mat_task = loop.create_task(
+                #     save_as_parquet(
+                #         lazy_combined_extraction_datasets.clone(),
+                #         f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
+                #     )
+                # )
+                # coroutine_futures.append(save_full_mat_task)
+                # save_full_mat_task.add_done_callback(coroutine_futures.remove)
+                get_readcount_table(
+                    args=args,
+                    sample=sample,
+                    barcode_path=barcode_path,
+                    barcode_df=barcode_df,
                 )
+
                 # read_count_summary_task = loop.create_task(
-                #     finalize(
-                #         lazy_combined_extraction_datasets,
+                #     get_readcount_table(
                 #         args=args,
                 #         sample=sample,
                 #         barcode_path=barcode_path,
                 #         barcode_df=barcode_df,
                 #     )
                 # )
-                coroutine_futures.append(read_count_summary_task)
-                read_count_summary_task.add_done_callback(coroutine_futures.remove)
-
-                save_full_mat_task = asyncio.ensure_future(
-                    save_as_parquet(
-                        lazy_combined_extraction_datasets,
-                        f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
-                    )
-                )
-                # save_full_mat_task = loop.create_task(
-                #     save_as_parquet(
-                #         lazy_combined_extraction_datasets,
-                #         f"{args.system_structure.full_mat_dir}/full_matrix.parquet",
-                #     )
-                # )
-                coroutine_futures.append(save_full_mat_task)
-                save_full_mat_task.add_done_callback(coroutine_futures.remove)
+                # coroutine_futures.append(read_count_summary_task)
+                # read_count_summary_task.add_done_callback(coroutine_futures.remove)
 
                 # TODO: Indel analysis using the full matrix
                 indel_analysis()
@@ -538,6 +596,6 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 ic(e)
                 ic(traceback.format_exc())
 
-    loop.run_until_complete(asyncio.gather(*asyncio.all_tasks()))
+    # loop.run_until_complete(asyncio.gather(*coroutine_futures))
 
     ic("All merging jobs finished...")
