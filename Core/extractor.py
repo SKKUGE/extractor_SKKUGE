@@ -8,29 +8,16 @@ __author__ = "forestkeep21@naver.com"
 __editor__ = "poowooho3@g.skku.edu"
 
 
+import time
 import traceback
 
 import dask.dataframe as dd
 import pandas as pd
 from icecream import ic
-
-# def load_test():
-#     import time  # debug
-
-#     if chunk_number is not None:
-#         ic(chunk_number)
-
-#     start_time = time.time()
-#     cnt = 0
-#     while True:
-#         cnt += 1
-#         ic(f"{chunk_number}:{cnt}")
-#         # time.sleep(0.1)
-#         if time.time() - start_time >= 5:
-#             break
+from tqdm import tqdm
 
 
-def extract_read_cnts(
+def extractor_main(
     sequence_frame: dd.DataFrame,
     barcode_df: pd.DataFrame,
     result_dir,
@@ -38,43 +25,43 @@ def extract_read_cnts(
     logger=None,
     chunk_number=None,
 ):
+    start_time = time.time()
     try:
         if chunk_number is None:
             raise ValueError("chunk_number is not defined")
 
-        if not barcode_df["Gene"].is_unique or not barcode_df["Barcode"].is_unique:
-            # Barcode used as a PK in the database, so duplication is not allowed
-            ic(
-                f"Barcode duplication detected! Check your program run design {chunk_number}"
-            )
-            ic(
-                f"Remove duplicated Barcodes... only the first one will be kept. {chunk_number}"
-            )
-            barcode_df.drop_duplicates(subset=["Barcode"], keep="first", inplace=True)
-
-        barcode_df["Barcode"] = barcode_df["Barcode"].str.upper()
-
-        ic(f"Barcode extraction initiated...{chunk_number}")
-
-        for i, (gene, barcode) in barcode_df.iterrows():
-            # ic(gene, barcode) # DEBUG
+        pbar = tqdm(total=barcode_df.shape[0])
+        pbar.set_description(f"Barcode extraction...{chunk_number}")
+        for ntp in barcode_df.itertuples():
+            gene = ntp.Gene
+            barcode = ntp.Query
             sequence_frame[gene] = sequence_frame["Sequence"].str.contains(
                 barcode, regex=True
             )
+            pbar.update(1)
 
-        return sequence_frame
+        pbar.close()
+
+        # Drop reads that do not contain any barcode
+        sequence_frame["Detection_count"] = sequence_frame.sum(
+            axis=1, numeric_only=True
+        ).astype(int)
+        sequence_frame = sequence_frame[sequence_frame["Detection_count"] > 0]
+
+        sequence_frame.to_parquet(
+            f"{result_dir}/parquets/{chunk_number}",
+            compression="snappy",
+            engine="pyarrow",
+            compute=True,
+            write_index=True,
+            write_metadata_file=True,
+        )
+        end_time = time.time()
+        ic(f"Barcode extraction finished...{gene} in {end_time-start_time} seconds")
+        return 0
 
     except Exception as e:
         ic(e)
         ic(traceback.format_exc())
 
         return -1
-
-
-def extractor_main(sequence, barcode, logger, result_dir, sep, chunk_number=0):
-
-    rval = extract_read_cnts(
-        sequence, barcode, result_dir, sep, logger, chunk_number=chunk_number
-    )
-    logger.info("Barcode extraction completed")
-    return rval

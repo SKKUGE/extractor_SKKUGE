@@ -3,25 +3,32 @@ import os
 import pathlib
 import subprocess as sp
 import sys
-import traceback
+from datetime import datetime
 from types import SimpleNamespace
 
 from psutil import cpu_count
 
-N_PHYSICAL_CORES = cpu_count(logical=False)
+N_PHYSICAL_CORES = cpu_count(logical=True)
 
 os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
 import pandas as pd
 from dask import config as dcf
 from dask import dataframe as dd
 
-dcf.set({"dataframe.query-planning": False})
+dcf.set(
+    {
+        "dataframe.convert-string": True,
+    }
+)
 import ctypes
 
 from dask import bag as db
 from dask.distributed import Client, LocalCluster
 from icecream import ic
 from tqdm import tqdm
+
+ic.configureOutput(prefix=f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | ")
+ic.configureOutput(includeContext=True)
 
 
 def trim_memory() -> int:
@@ -296,23 +303,23 @@ def run_pipeline(args: SimpleNamespace) -> None:
         processes=True,
         n_workers=N_PHYSICAL_CORES,  # DEBUG
         threads_per_worker=2,
-        memory_limit="4GiB",
         dashboard_address=":40928",
+        local_directory="/tmp",
     )
-    client = Client(cluster, timeout="2s")
+    client = Client(cluster)
     client.amm.start()
 
     ic(client)
     ic(client.dashboard_link)
 
-    for sample, barcode in tqdm(args.samples):
+    for sample, barcode_path in tqdm(args.samples):
         ExtractorRunner(
-            sample, barcode, args
+            sample, barcode_path, args
         )  # TODO: refactor its usage to avoid creating an object
 
         ic("Loading merged fastq file...")
         bag = db.read_text(
-            args.system_structure.input_file_organizer[sample], blocksize="100MB"
+            args.system_structure.input_file_organizer[sample], blocksize="100MiB"
         )
         sequence_ddf = bag.to_dataframe()
 
@@ -323,8 +330,10 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 columns=["ID", "Sequence", "Separator", "Quality"],
             )
         )
-        sequence_ddf = sequence_ddf.drop(columns=["Separator", "Quality"]).repartition(
-            "100MB"
+        sequence_ddf = (
+            sequence_ddf.drop(columns=["Separator", "Quality"])
+            .set_index("ID")
+            .repartition(N_PHYSICAL_CORES)
         )  # drop quality sequence
 
         ic("Save raw NGS reads as parquets...")
@@ -343,80 +352,79 @@ def run_pipeline(args: SimpleNamespace) -> None:
             calculate_divisions=True,
         )
         # Load barcode file
+        # The barcode writing rule: 1st-column should be name, and the others are n substrings for joint matching
         ic("Loading barcode file...")
         barcode_df = pd.read_csv(
-            barcode,
+            barcode_path,
             sep=args.sep,
             header=None,
-            names=["Gene", "Barcode"],
+        ).fillna("")
+        barcode_df.columns = ["Gene"] + [
+            f"Barcode_{i}" for i in range(1, len(barcode_df.columns))
+        ]
+        # TODO: Gene uniqueness test
+        if not barcode_df["Gene"].is_unique:
+            ic("Gene names are not unique")
+            ic(barcode_df["Gene"].duplicated())
+            ic("Drop duplicated gene names...")
+            barcode_df = barcode_df.drop_duplicates(subset="Gene")
+
+        barcode_df.loc[:, ["Barcode" in col for col in barcode_df.columns]].transform(
+            lambda x: x.str.upper()
         )
+        barcode_df["Query"] = barcode_df.loc[
+            :, ["Barcode" in col for col in barcode_df.columns]
+        ].apply(lambda x: ".*".join(x), axis=1)
         ic("Submitting extraction process...")
 
-        rval = sequence_ddf.map_partitions(
-            extractor_main,
-            barcode=barcode_df.iloc[
-                :, [0, 1]
-            ].dropna(),  # Use only Gene and Barcode columns
-            logger=args.logger,
-            result_dir=args.system_structure.result_dir,
-            sep=args.sep,
-        )
-        rval.visualize(f"{args.system_structure.result_dir}/extractor_main.png")
-
-        # Triggers copmute of the dataframe
-        # rval.to_parquet(
-        #     f"{args.system_structure.result_dir}/parquets/",
-        #     compression="snappy",
-        #     engine="pyarrow",
-        #     write_index=True,
-        #     write_metadata_file=True,
-        #     compute=True,
-        # )
-
-        # Gather results
-        ic("Checking extraction results...")
-        try:
-            if rval == -1:
-                ic(traceback.format_exc())
-                raise Exception(f"extractor_main has returned with {rval}")
-        except ValueError:
-            # Dataframe is returned
-
-            # BUG : Memory error
-            ic("Load extraction results...")
-            # rval = dd.read_parquet(
-            #     path=f"{args.system_structure.result_dir}/parquets/",
-            #     engine="pyarrow",
-            #     calculate_divisions=True,
-            # )
-
-        extraction_result_datasets = rval
-        ic(
-            extraction_result_datasets.shape[0].compute()
-            == sequence_ddf.shape[0].compute()
-        )
-        assert (
-            extraction_result_datasets.shape[0].compute()
-            == sequence_ddf.shape[0].compute()
-        )
+        futures = []
+        for n in range(0, sequence_ddf.npartitions):
+            futures.append(
+                client.submit(
+                    extractor_main,
+                    sequence_ddf.get_partition(n),
+                    barcode_df=barcode_df[
+                        ["Gene", "Query"]
+                    ],  # Use only Gene and Barcode columns
+                    logger=args.logger,
+                    result_dir=args.system_structure.result_dir,
+                    sep=args.sep,
+                    chunk_number=n,
+                )
+            )
 
         del bag, sequence_ddf
+
+        # Gather results
+        rvals = client.gather(futures)
+        if -1 in rvals:
+            ic("Extraction failed")
+            raise Exception("Extraction failed")
+
         client.run(gc.collect)
         client.run(trim_memory)
 
-        ic(extraction_result_datasets.shape[0].compute())
+        # ic("Load extraction results...")
 
-        summed_extraction_datasets = extraction_result_datasets.map_partitions(
-            finalize, sample=sample, barcode=barcode
-        )
+        # extraction_result_datasets = dd.read_parquet(
+        #     path=f"{args.system_structure.result_dir}/parquets/",
+        #     engine="pyarrow",
+        #     calculate_divisions=True,
+        # )
 
-        summed_extraction_datasets.to_csv(
-            f"{args.system_structure.result_dir}/read_counts.csv",
-            index=True,
-            single_file=True,
-            compute=True,
-        )
+        # ic(extraction_result_datasets.shape[0].compute())
 
-        ic(f"{sample}+{barcode}: Final read count table was generated.")
+        # summed_extraction_datasets = extraction_result_datasets.map_partitions(
+        #     finalize, sample=sample, barcode=barcode_df
+        # )
+
+        # summed_extraction_datasets.to_csv(
+        #     f"{args.system_structure.result_dir}/read_counts.csv",
+        #     index=True,
+        #     single_file=True,
+        #     compute=True,
+        # )
+
+        # ic(f"{sample}+{barcode}: Final read count table was generated.")
 
     ic("All merging jobs fired. Waiting for the final result...")
