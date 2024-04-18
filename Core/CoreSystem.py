@@ -1,6 +1,6 @@
-import gc
 import os
 import pathlib
+import re
 import subprocess as sp
 import sys
 from datetime import datetime
@@ -8,21 +8,25 @@ from types import SimpleNamespace
 
 from psutil import cpu_count
 
-N_PHYSICAL_CORES = cpu_count(logical=True)
+DEBUGGING = False
+N_PHYSICAL_CORES = cpu_count(logical=False)
 
 os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
 import pandas as pd
 from dask import config as dcf
-from dask import dataframe as dd
 
 dcf.set(
     {
         "dataframe.convert-string": True,
+        # "dataframe.backend": "cudf",
     }
 )
 import ctypes
 
+# import dask_cudf
+import dask
 from dask import bag as db
+from dask import dataframe as dd
 from dask.distributed import Client, LocalCluster
 from icecream import ic
 from tqdm import tqdm
@@ -34,6 +38,13 @@ ic.configureOutput(includeContext=True)
 def trim_memory() -> int:
     libc = ctypes.CDLL("libc.so.6")
     return libc.malloc_trim(0)
+
+
+def match_barcode(df) -> pd.Series:
+
+    return df.apply(
+        lambda x: bool(re.compile(x["query"]).search(x["sequence"])), axis=1
+    )
 
 
 def finalize(
@@ -110,18 +121,10 @@ class Helper(object):
             logger.warning(
                 "The number of samples in the Input folder and in the User folder does not matched. Check the file list in the Input folder and the project list in the User folder."
             )
-
-            # input_entries = [i.name for i in proj_path.glob("*")]
-            # user_entries = [i for i in loaded_samples]
             logger.warning(
                 f"Input folder: {len(list(proj_path.glob('*')))}, Project list samples: {len(loaded_samples)}"
             )
-            # logger.warning(
-            #     f"Input folder: {[i for i in input_entries if i not in user_entries]}"
-            # )
-            # logger.warning(
-            #     f"Project list samples: {[u for u in user_entries if u not in input_entries]}"
-            # )
+
         else:
             logger.info("The file list is correct, pass\n")
 
@@ -180,19 +183,19 @@ class SystemStructure(object):
         )
         self.result_dir = Helper.mkdir_if_not(self.output_sample_organizer[sample_name])
         self.parquet_dir = Helper.mkdir_if_not(self.result_dir / "parquets")
-        # self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
-
-        if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
-            sp.run(
-                [
-                    "rm",
-                    "-r",
-                    f"{self.result_dir / 'parquets'}",
-                ]
-            )
-            self.parquet_dir = Helper.mkdir_if_not(
-                self.result_dir / "parquets"
-            )  # Re-create the directory
+        self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
+        if not DEBUGGING:
+            if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
+                sp.run(
+                    [
+                        "rm",
+                        "-r",
+                        f"{self.result_dir / 'parquets'}",
+                    ]
+                )
+                self.parquet_dir = Helper.mkdir_if_not(
+                    self.result_dir / "parquets"
+                )  # Re-create the directory
 
 
 # TODO: FLASh integration? https://ccb.jhu.edu/software/FLASH/
@@ -247,26 +250,26 @@ class ExtractorRunner:
             self.args.system_structure.input_sample_organizer[self.sample]
             / "Split_files"
         )
-
-        if (
-            len(
-                os.listdir(
-                    f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}"
+        if not DEBUGGING:
+            if (
+                len(
+                    os.listdir(
+                        f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}"
+                    )
                 )
-            )
-            > 0
-        ):
-            sp.run(
-                [
-                    "rm",
-                    "-r",
-                    f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}",
-                ]
-            )
-            self.args.system_structure.seq_split_dir = Helper.mkdir_if_not(
-                self.args.system_structure.input_sample_organizer[self.sample]
-                / "Split_files"
-            )  # Re-create the directory
+                > 0
+            ):
+                sp.run(
+                    [
+                        "rm",
+                        "-r",
+                        f"{pathlib.Path.cwd() / self.args.system_structure.seq_split_dir}",
+                    ]
+                )
+                self.args.system_structure.seq_split_dir = Helper.mkdir_if_not(
+                    self.args.system_structure.input_sample_organizer[self.sample]
+                    / "Split_files"
+                )  # Re-create the directory
 
 
 def system_struct_checker(func):
@@ -294,63 +297,72 @@ def system_struct_checker(func):
 @system_struct_checker
 def run_pipeline(args: SimpleNamespace) -> None:
     # TODO: add parquet remove option
-
-    from Core.extractor import extractor_main as extractor_main
-
     ic("Initilaizing local cluster...")
 
-    cluster = LocalCluster(
+    cpu_cluster = LocalCluster(
         processes=True,
         n_workers=N_PHYSICAL_CORES,  # DEBUG
         threads_per_worker=2,
         dashboard_address=":40928",
-        local_directory="/tmp",
+        local_directory="./tmp",
     )
-    client = Client(cluster)
-    client.amm.start()
+    # gpu_cluster = LocalCUDACluster(
+    #     dashboard_address=":40929",
+    #     local_directory="./tmp",
+    # )
 
-    ic(client)
-    ic(client.dashboard_link)
+    cpu_client = Client(cpu_cluster)
+    # gpu_client = Client(gpu_cluster)
+
+    ic(cpu_client)
+    ic(cpu_client.dashboard_link)
+    # ic(gpu_client)
+    # ic(gpu_client.dashboard_link)
 
     for sample, barcode_path in tqdm(args.samples):
         ExtractorRunner(
             sample, barcode_path, args
         )  # TODO: refactor its usage to avoid creating an object
+        if not DEBUGGING:
+            ic("Loading fastq...")
+            bag = db.read_text(
+                args.system_structure.input_file_organizer[sample], blocksize="1MiB"
+            ).map(lambda x: x.strip())
+            bag = cpu_client.scatter(bag).result()
 
-        ic("Loading merged fastq file...")
-        bag = db.read_text(
-            args.system_structure.input_file_organizer[sample], blocksize="100MiB"
-        )
-        sequence_ddf = bag.to_dataframe()
+            ic("Transforming fastq...")
+            sequence_ddf = bag.to_dataframe()
+            sequence_ddf = cpu_client.scatter(sequence_ddf).result()
+            sequence_da = sequence_ddf.to_dask_array(lengths=True)
+            sequence_da = sequence_da.reshape(-1, 4)
+            sequence_da = cpu_client.scatter(sequence_da).result()
 
-        sequence_ddf = (
-            sequence_ddf.to_dask_array(lengths=True)
-            .reshape(-1, 4)
-            .to_dask_dataframe(
-                columns=["ID", "Sequence", "Separator", "Quality"],
+            ic("Repartitioning...")
+            sequence_ddf = sequence_da.to_dask_dataframe(
+                columns=["id", "sequence", "separator", "quality"],
             )
-        )
-        sequence_ddf = (
-            sequence_ddf.drop(columns=["Separator", "Quality"])
-            .set_index("ID")
-            .repartition(N_PHYSICAL_CORES)
-        )  # drop quality sequence
+            sequence_ddf = sequence_ddf.drop(
+                columns=["separator", "quality"]
+            ).repartition(
+                partition_size="512KiB"
+            )  # drop quality sequence
 
-        ic("Save raw NGS reads as parquets...")
-        sequence_ddf.to_parquet(
-            f"{args.system_structure.seq_split_dir}",
-            engine="pyarrow",
-            write_index=True,
-            write_metadata_file=True,
-            compute=True,
-        )
+            ic("Save raw NGS reads as parquets...")
+            sequence_ddf.to_parquet(
+                f"{args.system_structure.seq_split_dir}",
+                engine="pyarrow",
+                write_index=True,
+                write_metadata_file=True,
+                compute=True,
+            )
+
         ic("Parquet generation completed, load parquets")
-
         sequence_ddf = dd.read_parquet(
             f"{args.system_structure.seq_split_dir}",
-            engine="pyarrow",
+            # engine="pyarrow",
             calculate_divisions=True,
         )
+
         # Load barcode file
         # The barcode writing rule: 1st-column should be name, and the others are n substrings for joint matching
         ic("Loading barcode file...")
@@ -359,51 +371,115 @@ def run_pipeline(args: SimpleNamespace) -> None:
             sep=args.sep,
             header=None,
         ).fillna("")
-        barcode_df.columns = ["Gene"] + [
-            f"Barcode_{i}" for i in range(1, len(barcode_df.columns))
+        barcode_df.columns = ["gene"] + [
+            f"barcode_{i}" for i in range(1, len(barcode_df.columns))
         ]
         # TODO: Gene uniqueness test
-        if not barcode_df["Gene"].is_unique:
+        if not barcode_df["gene"].is_unique:
             ic("Gene names are not unique")
-            ic(barcode_df["Gene"].duplicated())
+            ic(barcode_df["gene"].duplicated())
             ic("Drop duplicated gene names...")
             barcode_df = barcode_df.drop_duplicates(subset="Gene")
 
-        barcode_df.loc[:, ["Barcode" in col for col in barcode_df.columns]].transform(
+        barcode_df.loc[:, ["barcode" in col for col in barcode_df.columns]].transform(
             lambda x: x.str.upper()
         )
-        barcode_df["Query"] = barcode_df.loc[
-            :, ["Barcode" in col for col in barcode_df.columns]
+        barcode_df["query"] = barcode_df.loc[
+            :, ["barcode" in col for col in barcode_df.columns]
         ].apply(lambda x: ".*".join(x), axis=1)
+        # barcode_df = cudf.from_pandas(barcode_df)
+
+        # TODO: cartesian product of barcode and gene and calculate it
+        ic("Calculating cartesian product...")
+        sequence_ddf["join_key"] = 1
+        barcode_df["join_key"] = 1
+
+        sequence_ddf = sequence_ddf.repartition(partition_size="32KiB")
+        delayed_sequence_ddf = dask.delayed(sequence_ddf.merge)(
+            barcode_df[["gene", "query", "join_key"]], on="join_key", how="left"
+        ).drop("join_key", axis=1)
+        sequence_ddf = delayed_sequence_ddf.compute()
+
+        sequence_ddf.to_parquet(
+            f"{args.system_structure.result_dir}/full_matrix/",
+            write_index=True,
+            write_metadata_file=True,
+            engine="pyarrow",
+            compute=True,
+        )
+        sequence_ddf = dd.read_parquet(
+            f"{args.system_structure.result_dir}/full_matrix/",
+            engine="pyarrow",
+            calculate_divisions=True,
+        )
+
         ic("Submitting extraction process...")
+        sequence_ddf["match"] = False
+        sequence_ddf["match"] = sequence_ddf.map_partitions(
+            match_barcode, meta=dd.utils.make_meta(sequence_ddf["match"])
+        )
 
-        futures = []
-        for n in range(0, sequence_ddf.npartitions):
-            futures.append(
-                client.submit(
-                    extractor_main,
-                    sequence_ddf.get_partition(n),
-                    barcode_df=barcode_df[
-                        ["Gene", "Query"]
-                    ],  # Use only Gene and Barcode columns
-                    logger=args.logger,
-                    result_dir=args.system_structure.result_dir,
-                    sep=args.sep,
-                    chunk_number=n,
-                )
-            )
+        sequence_ddf.to_parquet(
+            f"{args.system_structure.result_dir}/parquets/",
+            compression="snappy",
+            engine="pyarrow",
+            compute=True,
+            write_index=True,
+            write_metadata_file=True,
+        )
+        sequence_ddf = dd.read_parquet(
+            f"{args.system_structure.result_dir}/parquets/",
+            engine="pyarrow",
+            calculate_divisions=True,
+        )
+        sequence_ddf["gene"] = sequence_ddf["gene"].astype("category")
+        sequence_ddf["gene"] = sequence_ddf["gene"].cat.as_known()
+        pivot_sequence_ddf = sequence_ddf.pivot_table(
+            index="id",
+            columns="gene",
+            values="match",
+        ).repartition(npartitions=sequence_ddf.npartitions)
 
-        del bag, sequence_ddf
+        pivot_sequence_ddf.columns = pivot_sequence_ddf.columns.astype(str)
+        pivot_sequence_ddf = pivot_sequence_ddf[
+            pivot_sequence_ddf.sum(axis=1, numeric_only=True)
+            <= args.dup_threshold  # Filter out ambiguous reads
+        ]
 
-        # Gather results
-        rvals = client.gather(futures)
-        if -1 in rvals:
-            ic("Extraction failed")
-            raise Exception("Extraction failed")
+        result_table = pivot_sequence_ddf.sum(axis=0)
+        result_table = result_table.compute().T
+        result_table.to_csv(f"{args.system_structure.result_dir}/read_counts.csv")
 
-        client.run(gc.collect)
-        client.run(trim_memory)
+        # futures = []
+        # for n in tqdm(range(0, sequence_ddf.npartitions)):
+        #     futures.append(
+        #         # gpu_client.submit(
+        #         cpu_client.submit(
+        #             extractor_main,
+        #             sequence_ddf.get_partition(n),
+        #             barcode_df=barcode_df[
+        #                 ["gene", "query"]
+        #             ],  # Use only Gene and Barcode columns
+        #             logger=args.logger,
+        #             result_dir=args.system_structure.result_dir,
+        #             sep=args.sep,
+        #             chunk_number=n,
+        #             generosity=args.dup_threshold,
+        #         )
+        #     )
 
+        # del bag, sequence_ddf
+
+        # # Gather results
+        # rvals = cpu_client.gather(futures)
+        # if -1 in rvals:
+        #     ic("Extraction failed")
+        #     raise Exception("Extraction failed")
+
+        # cpu_client.run(gc.collect)
+        # cpu_client.run(trim_memory)
+
+        # TODO: Downstream tasks, such as merging, should be done here
         # ic("Load extraction results...")
 
         # extraction_result_datasets = dd.read_parquet(

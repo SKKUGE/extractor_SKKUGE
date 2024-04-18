@@ -176,3 +176,5 @@ Output/*
 *.gz
 *.out
 *_metadata
+
+tmp/*

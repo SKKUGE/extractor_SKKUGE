@@ -3,6 +3,7 @@ import logging
 import os
 import sys
 from types import SimpleNamespace
+
 from Core.CoreSystem import (
     Helper,
     SystemStructure,
@@ -57,14 +58,14 @@ def main():
         help="Separator character for the barcode file. Default is ':'.",
         default=":",
     )
-    # parser.add_argument(
-    #     "-c",
-    #     "--chunk_size",
-    #     dest="chunk_size",
-    #     type=int,
-    #     help="barcode file chunk size",
-    #     default=1,
-    # )
+    parser.add_argument(
+        "--dup_threshold",
+        default="2",
+        type=int,
+        dest="dup_threshold",
+        help="How many barcodes are allowed to be assigned to the same sequence \
+            In prime editing case, 2 is recommended; The edited/unedited (barcode + wide target sequence), and the barcode only",
+    )
 
     args = parser.parse_args()
 
