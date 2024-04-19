@@ -40,11 +40,10 @@ def trim_memory() -> int:
     return libc.malloc_trim(0)
 
 
-def match_barcode(df) -> pd.Series:
+def match_barcode(df) -> pd.DataFrame:
+    df["match"] = df.apply(lambda x: bool(re.search(x["query"], x["sequence"])), axis=1)
 
-    return df.apply(
-        lambda x: bool(re.compile(x["query"]).search(x["sequence"])), axis=1
-    )
+    return df[df["match"] == True]
 
 
 def finalize(
@@ -326,7 +325,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         if not DEBUGGING:
             ic("Loading fastq...")
             bag = db.read_text(
-                args.system_structure.input_file_organizer[sample], blocksize="1MiB"
+                args.system_structure.input_file_organizer[sample], blocksize="64MiB"
             ).map(lambda x: x.strip())
             bag = cpu_client.scatter(bag).result()
 
@@ -343,9 +342,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
             )
             sequence_ddf = sequence_ddf.drop(
                 columns=["separator", "quality"]
-            ).repartition(
-                partition_size="512KiB"
             )  # drop quality sequence
+            sequence_ddf = sequence_ddf.repartition(partition_size="4KiB")
 
             ic("Save raw NGS reads as parquets...")
             sequence_ddf.to_parquet(
@@ -356,67 +354,82 @@ def run_pipeline(args: SimpleNamespace) -> None:
                 compute=True,
             )
 
-        ic("Parquet generation completed, load parquets")
+            # Load barcode file
+            # The barcode writing rule: 1st-column should be name, and the others are n substrings for joint matching
+            ic("Loading barcode file...")
+            barcode_df = pd.read_csv(
+                barcode_path,
+                sep=args.sep,
+                header=None,
+            ).fillna("")
+            barcode_df.columns = ["gene"] + [
+                f"barcode_{i}" for i in range(1, len(barcode_df.columns))
+            ]
+            # TODO: Gene uniqueness test
+            if not barcode_df["gene"].is_unique:
+                ic("Gene names are not unique")
+                ic(barcode_df["gene"].duplicated())
+                ic("Drop duplicated gene names...")
+                barcode_df = barcode_df.drop_duplicates(subset="Gene")
+
+            barcode_df.loc[
+                :, ["barcode" in col for col in barcode_df.columns]
+            ].transform(lambda x: x.str.upper())
+            barcode_df["query"] = barcode_df.loc[
+                :, ["barcode" in col for col in barcode_df.columns]
+            ].apply(lambda x: ".*".join(x), axis=1)
+            # barcode_df = cudf.from_pandas(barcode_df)
+
+            ic("Parquet generation completed, load parquets")
+            sequence_ddf = dd.read_parquet(
+                f"{args.system_structure.seq_split_dir}",
+                # engine="pyarrow",
+                calculate_divisions=True,
+            )
+
+            # TODO: cartesian product of barcode and gene and calculate it
+            ic("Calculating cartesian product...")
+            sequence_ddf["join_key"] = 1
+            barcode_df["join_key"] = 1
+
+            delayed_sequence_ddf = dask.delayed(sequence_ddf.merge)(
+                barcode_df[["gene", "query", "join_key"]], on="join_key", how="left"
+            ).drop("join_key", axis=1)
+            sequence_ddf = delayed_sequence_ddf.compute()
+            sequence_ddf.to_parquet(
+                f"{args.system_structure.result_dir}/full_matrix/",
+                write_index=True,
+                write_metadata_file=True,
+                engine="pyarrow",
+                compute=True,
+            )
+        # END: DEBUGGING
+
         sequence_ddf = dd.read_parquet(
-            f"{args.system_structure.seq_split_dir}",
-            # engine="pyarrow",
+            f"{args.system_structure.result_dir}/full_matrix/",
+            engine="pyarrow",
             calculate_divisions=True,
         )
-
-        # Load barcode file
-        # The barcode writing rule: 1st-column should be name, and the others are n substrings for joint matching
-        ic("Loading barcode file...")
-        barcode_df = pd.read_csv(
-            barcode_path,
-            sep=args.sep,
-            header=None,
-        ).fillna("")
-        barcode_df.columns = ["gene"] + [
-            f"barcode_{i}" for i in range(1, len(barcode_df.columns))
-        ]
-        # TODO: Gene uniqueness test
-        if not barcode_df["gene"].is_unique:
-            ic("Gene names are not unique")
-            ic(barcode_df["gene"].duplicated())
-            ic("Drop duplicated gene names...")
-            barcode_df = barcode_df.drop_duplicates(subset="Gene")
-
-        barcode_df.loc[:, ["barcode" in col for col in barcode_df.columns]].transform(
-            lambda x: x.str.upper()
-        )
-        barcode_df["query"] = barcode_df.loc[
-            :, ["barcode" in col for col in barcode_df.columns]
-        ].apply(lambda x: ".*".join(x), axis=1)
-        # barcode_df = cudf.from_pandas(barcode_df)
-
-        # TODO: cartesian product of barcode and gene and calculate it
-        ic("Calculating cartesian product...")
-        sequence_ddf["join_key"] = 1
-        barcode_df["join_key"] = 1
-
-        sequence_ddf = sequence_ddf.repartition(partition_size="32KiB")
-        delayed_sequence_ddf = dask.delayed(sequence_ddf.merge)(
-            barcode_df[["gene", "query", "join_key"]], on="join_key", how="left"
-        ).drop("join_key", axis=1)
-        sequence_ddf = delayed_sequence_ddf.compute()
-
-        sequence_ddf.to_parquet(
-            f"{args.system_structure.result_dir}/full_matrix/",
-            write_index=True,
-            write_metadata_file=True,
-            engine="pyarrow",
-            compute=True,
-        )
-        sequence_ddf = dd.read_parquet(
-            f"{args.system_structure.result_dir}/full_matrix/",
-            engine="pyarrow",
-            calculate_divisions=True,
-        )
+        # ic("Repartitioning...")
+        # sequence_ddf = sequence_ddf.repartition(partition_size="16MiB")
+        # sequence_ddf.to_parquet(
+        #     f"{args.system_structure.result_dir}/full_matrix_repartitioned/",
+        #     engine="pyarrow",
+        #     write_index=True,
+        #     write_metadata_file=True,
+        #     compute=True,
+        # )
+        # sequence_ddf = dd.read_parquet(
+        #     f"{args.system_structure.result_dir}/full_matrix_repartitioned/",
+        #     engine="pyarrow",
+        #     calculate_divisions=True,
+        # )
 
         ic("Submitting extraction process...")
         sequence_ddf["match"] = False
-        sequence_ddf["match"] = sequence_ddf.map_partitions(
-            match_barcode, meta=dd.utils.make_meta(sequence_ddf["match"])
+        sequence_ddf = sequence_ddf.map_partitions(
+            match_barcode,
+            meta=dd.utils.make_meta(sequence_ddf),  # TODO: Remove Falses in situ?
         )
 
         sequence_ddf.to_parquet(
@@ -427,6 +440,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
             write_index=True,
             write_metadata_file=True,
         )
+
+        ic("Pivotting extraction results...")
         sequence_ddf = dd.read_parquet(
             f"{args.system_structure.result_dir}/parquets/",
             engine="pyarrow",
@@ -438,7 +453,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
             index="id",
             columns="gene",
             values="match",
-        ).repartition(npartitions=sequence_ddf.npartitions)
+        )
 
         pivot_sequence_ddf.columns = pivot_sequence_ddf.columns.astype(str)
         pivot_sequence_ddf = pivot_sequence_ddf[
@@ -446,61 +461,11 @@ def run_pipeline(args: SimpleNamespace) -> None:
             <= args.dup_threshold  # Filter out ambiguous reads
         ]
 
-        result_table = pivot_sequence_ddf.sum(axis=0)
-        result_table = result_table.compute().T
-        result_table.to_csv(f"{args.system_structure.result_dir}/read_counts.csv")
-
-        # futures = []
-        # for n in tqdm(range(0, sequence_ddf.npartitions)):
-        #     futures.append(
-        #         # gpu_client.submit(
-        #         cpu_client.submit(
-        #             extractor_main,
-        #             sequence_ddf.get_partition(n),
-        #             barcode_df=barcode_df[
-        #                 ["gene", "query"]
-        #             ],  # Use only Gene and Barcode columns
-        #             logger=args.logger,
-        #             result_dir=args.system_structure.result_dir,
-        #             sep=args.sep,
-        #             chunk_number=n,
-        #             generosity=args.dup_threshold,
-        #         )
-        #     )
-
-        # del bag, sequence_ddf
-
-        # # Gather results
-        # rvals = cpu_client.gather(futures)
-        # if -1 in rvals:
-        #     ic("Extraction failed")
-        #     raise Exception("Extraction failed")
-
-        # cpu_client.run(gc.collect)
-        # cpu_client.run(trim_memory)
-
-        # TODO: Downstream tasks, such as merging, should be done here
-        # ic("Load extraction results...")
-
-        # extraction_result_datasets = dd.read_parquet(
-        #     path=f"{args.system_structure.result_dir}/parquets/",
-        #     engine="pyarrow",
-        #     calculate_divisions=True,
-        # )
-
-        # ic(extraction_result_datasets.shape[0].compute())
-
-        # summed_extraction_datasets = extraction_result_datasets.map_partitions(
-        #     finalize, sample=sample, barcode=barcode_df
-        # )
-
-        # summed_extraction_datasets.to_csv(
-        #     f"{args.system_structure.result_dir}/read_counts.csv",
-        #     index=True,
-        #     single_file=True,
-        #     compute=True,
-        # )
-
-        # ic(f"{sample}+{barcode}: Final read count table was generated.")
+        result_series = pivot_sequence_ddf.sum(axis=0)
+        result_series = result_series.compute().T
+        barcode_df = barcode_df.drop(columns=["join_key"]).set_index("gene")
+        barcode_df["read_count"] = result_series
+        barcode_df["read_count"] = barcode_df["read_count"].fillna(0)
+        barcode_df.to_csv(f"{args.system_structure.result_dir}/read_counts.csv")
 
     ic("All merging jobs fired. Waiting for the final result...")
