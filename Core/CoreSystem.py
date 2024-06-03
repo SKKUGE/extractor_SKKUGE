@@ -306,91 +306,116 @@ def system_struct_checker(func):
 
 @system_struct_checker
 def run_pipeline(args: SimpleNamespace) -> None:
-    # TODO: add parquet remove option
+    for sample, barcode in args.samples:
+        sample = Helper.SplitSampleInfo(sample)
 
-    from Core.extractor import extractor_main as extractor_main
+        extractor_runner = ExtractorRunner(sample, barcode, args)
 
-    args.logger.info("Initilaizing local cluster...")
+        # Chunking
+        args.logger.info("Splitting sequecnes into chunks")
+        extractor_runner._split_into_chunks()
 
-    cluster = LocalCluster(
-        processes=True,
-        n_workers=mp.cpu_count(),  # DEBUG
-        memory_limit="4GB",
-        dashboard_address=":40927",
-    )
-    client = Client(cluster)
-    client.amm.start()
+        args.logger.info("Populating command...")
+        listCmd = extractor_runner._populate_command(barcode)
 
-    ic(client)
-    ic(client.dashboard_link)
+        args.logger.info("RunMulticore")
 
-    output_futures = []
-    for sample, barcode in tqdm(args.samples):
-        ExtractorRunner(
-            sample, barcode, args
-        )  # TODO: refactor its usage to avoid creating an object
-
-        args.logger.info("Loading merged fastq file...")
-        bag = db.read_text(args.system_structure.input_file_organizer[sample])
-        sequence_ddf = bag.to_dataframe()
-        sequence_ddf = (
-            sequence_ddf.to_dask_array(lengths=True)
-            .reshape(-1, 4)
-            .to_dask_dataframe(
-                columns=["ID", "Sequence", "Separator", "Quality"],
-            )
-        ).repartition(partition_size="1GB")
-        # sequence_ddf = client.persist(sequence_ddf)  # BUG
-        # wait(sequence_ddf)
-
-        # Load barcode file
-        barcode_row_length = sum(1 for row in open(barcode, "r"))
-        chunk_size = barcode_row_length // int(mp.cpu_count() * 0.5)
-        args.logger.info("Loading barcode file...")
-        barcode_df = pd.read_csv(
-            barcode,
-            sep=args.sep,
-            header=None,
-            names=["Gene", "Barcode"],
-            chunksize=chunk_size,
+        # Refactor this block of code for flushing memory
+        run_extractor_mp(
+            listCmd,
+            args.multicore,
+            args.logger,
+            args.verbose,
+            args.system_structure.result_dir,
+            sample,
         )
-        args.logger.info("Submitting extraction process...")
-        futures = []
-        for i, barcode_chunk in enumerate(barcode_df):
-            futures.append(
-                client.submit(
-                    extractor_main,
-                    sequence_ddf,
-                    barcode_chunk.iloc[
-                        :, [0, 1]
-                    ].dropna(),  # Use only Gene and Barcode columns
-                    args.logger,
-                    args.system_structure.result_dir,
-                    args.sep,
-                    chunk_number=i,
-                )
-            )
-        # Gather results
-        ic("Gathering extraction results...")
-        with ProgressBar():
-            wait(futures)
-        rvals = client.gather(futures)
-        for rval in rvals:
-            try:
-                if rval == -1:
-                    ic(traceback.format_exc())
-                    raise Exception(f"extractor_main has returned with {rval}")
-            except ValueError:
-                ic("Parquet generation completed")
-                continue
-        client.run(trim_memory)
+        sp.run(
+            [
+                "rm",
+                "-r",
+                f"{pathlib.Path.cwd() / args.system_structure.seq_split_dir}",
+            ]
+        )
 
-        merge_future = client.submit(merge_parquets, args, rvals, sample, barcode)
-        output_futures.append(merge_future)
-        fire_and_forget(merge_future)
-        del bag, sequence_ddf
-    # BUG: result csv not generated
 
-    ic("All merging jobs fired. Waiting for the final result...")
-    with ProgressBar():
-        wait(output_futures)
+def run_extractor_mp(
+    lCmd, iCore, logger, verbose_mode: bool, result_dir: pathlib.Path, sample_name
+) -> None:
+    import gc
+    import time
+
+    import dask.dataframe as dd
+    import numpy as np
+    from tqdm import tqdm
+
+    from extractor import main as extractor_main
+
+    for sCmd in lCmd:
+        logger.info(f"Running {sCmd} command with {iCore} cores")
+
+    result = []
+    start = time.time()
+    with ProcessPoolExecutor(max_workers=iCore) as executor:
+        for rval in list(tqdm(executor.map(extractor_main, lCmd), total=len(lCmd))):
+            result.append(rval)
+    end = time.time()
+    logger.info(f"Extraction is done. {end - start}s elapsed.")
+
+    logger.info("Generating statistics...")
+
+    with open(f"{result_dir}/{sample_name}+read_statstics.txt", "w") as f:
+        read_stat = np.concatenate([rval for rval in result], axis=0)
+        detected, total_read, detection_rate = (
+            read_stat.sum(),
+            read_stat.shape[0],
+            read_stat.sum() / read_stat.shape[0],
+        )
+        f.write(f"Total read: {total_read}\n")
+        f.write(f"Detected read: {detected}\n")
+        f.write(f"Detection rate in the sequence pool: {detection_rate}\n")
+
+    logger.info("Generating final extraction results...")
+
+    # TODO: asynchronous merging of parquet files
+    # load multiple csv files into one dask dataframe
+    # TODO : Refactor this block of code
+    parquets = []
+    for f in pathlib.Path(f"{result_dir}/parquets").glob("*.parquet"):
+        d_parquet = dd.read_parquet(f)
+        d_parquet["n_ids"] = d_parquet["ID"].apply(len, meta=("ID", "int64"))
+        d_parquet = d_parquet.explode("ID")
+        d_parquet["Read_counts"] = (
+            d_parquet["Read_counts"] / d_parquet["n_ids"]
+        )  # mutiplied and divided by the number of IDs
+        parquets.append(d_parquet)
+    df = dd.concat(parquets)
+
+    # DEBUG
+    df.compute().to_csv(f"{result_dir}/test.csv", index=False)
+
+    df["RPM"] = df["Read_counts"] / df["Read_counts"].sum() * 1e6
+
+    df.drop(["ID", "n_ids"], axis=1).groupby(
+        ["Gene", "Barcode"]
+    ).sum().compute().to_csv(
+        f"{result_dir}/{sample_name}+extraction_result.csv", index=True
+    )  # Fetch the original Read count from n_ids
+    # TODO: refactor this block of code
+
+    if verbose_mode:
+        # Create NGS_ID_classification.csv
+
+        df.drop(["Read_counts"], axis=1).dropna(subset=["ID"]).set_index(
+            "ID"
+        ).compute().to_csv(
+            f"{result_dir}/{sample_name}+multiple_detection_test_result.csv", index=True
+        )
+        # Create Barcode_multiple_detection_test.csv
+        df.groupby(["ID"])["Barcode"].count().compute().to_csv(
+            f"{result_dir}/{sample_name}+multiple_detection_test_by_id.csv"
+        )
+
+        # Create statistics for analysis
+        gc.collect()
+
+    return
