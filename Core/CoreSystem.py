@@ -151,7 +151,7 @@ class SystemStructure(object):
         self.output_sample_organizer[sample_name] = Helper.mkdir_if_not(self.output_dir / barcode_name / sample_name)
         self.result_dir = Helper.mkdir_if_not(self.output_sample_organizer[sample_name])
         self.parquet_dir = Helper.mkdir_if_not(self.result_dir / "parquets")
-        self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
+        # self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
         if not DEBUGGING:
             if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
                 sp.run(
@@ -229,13 +229,14 @@ def system_struct_checker(func):
 
 @system_struct_checker
 def run_pipeline(args: SimpleNamespace) -> None:
+
     # TODO: time benchmarking
     # TODO: add parquet remove option
     ic("Initilaizing local cluster...")
 
     cpu_cluster = LocalCluster(
         processes=True,
-        # n_workers=N_PHYSICAL_CORES,  # DEBUG
+        n_workers=N_PHYSICAL_CORES,  # DEBUG
         # threads_per_worker=2,
         dashboard_address=":40928",
         local_directory="./tmp",
@@ -247,73 +248,89 @@ def run_pipeline(args: SimpleNamespace) -> None:
     ic(cpu_client.dashboard_link)
 
     for sample, barcode_path in tqdm(args.samples):
+        start = datetime.now()
         ExtractorRunner(sample, barcode_path, args)  # TODO: refactor its usage to avoid creating an object
         # if not DEBUGGING:
 
-        if convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="64MiB") < 0:
+        if convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="1MiB") < 0:
             raise Exception("FASTQ to parquet conversion failed")
-
         ic("Generating parquets completed")
 
         # END: DEBUGGING
         ic("Loading barcides...")
         barcode_df = load_barcode_file(barcode_path, args)
         # Read partitioned parquets with duckdb
-        ic("Loading parquets...")
+
         con = duckdb.connect()
+        con.sql("--sql SET enable_progress_bar = true;")
+        ic("Cartesian product generation...")
         cartesian_df = con.sql(
-            f"SELECT * FROM read_parquet('{args.system_structure.seq_split_dir}/*.parquet') CROSS JOIN (SELECT gene, query FROM barcode_df) AS barcode_df"
+            f"SELECT * FROM read_parquet('{args.system_structure.seq_split_dir}/*.parquet') CROSS JOIN (SELECT gene, query FROM barcode_df) AS barcode_df;"
         )
 
         # Perform the query using DuckDB and tag truthy for each regular expression
-        ic("Extraction commenced...")
+        ic("regex search & filtering...")
         sequence_col = duckdb.ColumnExpression("sequence")
         query_col = duckdb.ColumnExpression("query")
-        sequence_ddf = con.sql(
-            """
-            --sql
+        extraction_result = con.sql(
+            """--sql
             SELECT  *, CAST(regexp_matches(sequence, query) AS INT) AS match
             FROM cartesian_df
-            """
-        )
-        sequence_ddf = con.sql(
-            """
-            --sql
-            SELECT id, gene, sequence, match
-            FROM sequence_ddf
-            WHERE match = 1
+            WHERE match > 0 ;
             """
         )
 
-        ic("Pivotting extraction results...")
-        # TODO: Is pivot necessary? Can we use just groupby?
-        pivot_sequence_ddf = con.sql(
-            """
-                --sql
-                PIVOT sequence_ddf  
-                ON gene
-                USING SUM(match)
+        ic("Filtering out sequences with violation...")
+        filtered_ids = con.sql(
+            """--sql
+                SELECT id, sum(match) AS detection_count_per_sequence
+                FROM  extraction_result
                 GROUP BY id
+                HAVING SUM(match) <= 2;
                 """
         )
 
-        pivot_sequence_ddf.columns = pivot_sequence_ddf.columns.astype(str)
-        pivot_sequence_ddf = pivot_sequence_ddf[
-            pivot_sequence_ddf.sum(axis=1, numeric_only=True) <= args.dup_threshold  # Filter out ambiguous reads
-        ]
+        # Export to parquets
+        ic("Get genuine sequences for export...")
+        filtered_result = con.sql(
+            """--sql
+            SELECT * FROM extraction_result JOIN filtered_ids ON (extraction_result.id = filtered_ids.id);
+            """
+        )
 
-        result_series = pivot_sequence_ddf.sum(axis=0)
-        result_series = result_series.compute().T
-        barcode_df = barcode_df.drop(columns=["join_key"]).set_index("gene")
-        barcode_df["read_count"] = result_series
-        barcode_df["read_count"] = barcode_df["read_count"].fillna(0)
-        barcode_df.to_csv(f"{args.system_structure.result_dir}/read_counts.csv")
+        ic("Export full parquet...")
+        dst = f"{args.system_structure.parquet_dir}/extracted_result.parquet"
+        con.sql(
+            f"""--sql
+            COPY filtered_result TO '{dst}' 
+            (FORMAT 'parquet', COMPRESSION 'zstd', ROW_GROUP_SIZE '100_000');
+            """
+        )
+
+        ic("Export barcode extraction result csv...")
+        read_count_table_path = f"{args.system_structure.result_dir}/filtered_result.csv"
+        con.sql(
+            f"""--sql
+            COPY (
+            SELECT gene, SUM(match) AS read_count
+            FROM filtered_result
+            GROUP BY gene
+            ) TO '{read_count_table_path}' 
+            WITH (FORMAT CSV, HEADER, DELIMITER ',');
+            """
+        )
+        end = datetime.now()
+        ic(f"Elapsed time: {end - start} for {sample}+{barcode_path}")
+        with open(args.system_structure.project_samples_path, "a", encoding="utf-8") as f:
+            f.write(f"{sample},{barcode_path}\n")
+            f.write(f"# {end - start} s elapsed\n")
 
     ic("All merging jobs fired. Waiting for the final result...")
 
 
 def convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="64MiB"):
     """
+
     Convert a FASTQ file into splitted parquet files.
 
     Args:
@@ -337,13 +354,10 @@ def convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="64
         sequence_da = sequence_ddf.to_dask_array(lengths=True)
         sequence_da = sequence_da.reshape(-1, 4)
         sequence_da = cpu_client.scatter(sequence_da).result()
-
-        # ic("Repartitioning...")
         sequence_ddf = sequence_da.to_dask_dataframe(
             columns=["id", "sequence", "separator", "quality"],
         )
-        # sequence_ddf = sequence_ddf.drop(columns=["separator", "quality"])  # drop quality sequence
-        # sequence_ddf = sequence_ddf.repartition(partition_size="1MiB")
+        sequence_ddf = sequence_ddf.drop(columns=["separator"])
 
         ic("Save raw NGS reads as parquets...")
         sequence_ddf.to_parquet(
