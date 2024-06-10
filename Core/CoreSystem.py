@@ -152,6 +152,7 @@ class SystemStructure(object):
         self.result_dir = Helper.mkdir_if_not(self.output_sample_organizer[sample_name])
         self.parquet_dir = Helper.mkdir_if_not(self.result_dir / "parquets")
         # self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
+        # self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
         if not DEBUGGING:
             if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
                 sp.run(
