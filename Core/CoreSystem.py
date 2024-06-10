@@ -22,9 +22,11 @@ dcf.set(
 )
 import ctypes
 
+import cudf
 import duckdb
 from dask import bag as db
 from dask.distributed import Client, LocalCluster
+from dask_cuda import LocalCUDACluster
 from icecream import ic
 from tqdm import tqdm
 
@@ -233,8 +235,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
     # TODO: time benchmarking
     # TODO: add parquet remove option
-    ic("Initilaizing local cluster...")
-
+    ic("Initilaizing local CPU cluster...")
     cpu_cluster = LocalCluster(
         processes=True,
         n_workers=N_PHYSICAL_CORES,  # DEBUG
@@ -242,11 +243,15 @@ def run_pipeline(args: SimpleNamespace) -> None:
         dashboard_address=":40928",
         local_directory="./tmp",
     )
-
     cpu_client = Client(cpu_cluster)
-
     ic(cpu_client)
     ic(cpu_client.dashboard_link)
+
+    ic("Initializing local GPU cluster...")
+    gpu_cluster = LocalCUDACluster(dashboard_address=":40929")
+    gpu_client = Client(gpu_cluster)
+    ic(gpu_client)
+    ic(gpu_client.dashboard_link)
 
     for sample, barcode_path in tqdm(args.samples):
         start = datetime.now()
@@ -258,68 +263,12 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ic("Generating parquets completed")
 
         # END: DEBUGGING
-        ic("Loading barcides...")
+        ic("Loading barcodes...")
         barcode_df = load_barcode_file(barcode_path, args)
+        barcode_df = cudf.from_pandas(barcode_df)
+
         # Read partitioned parquets with duckdb
-
-        con = duckdb.connect()
-        con.sql("--sql SET enable_progress_bar = true;")
-        ic("Cartesian product generation...")
-        cartesian_df = con.sql(
-            f"SELECT * FROM read_parquet('{args.system_structure.seq_split_dir}/*.parquet') CROSS JOIN (SELECT gene, query FROM barcode_df) AS barcode_df;"
-        )
-
-        # Perform the query using DuckDB and tag truthy for each regular expression
-        ic("regex search & filtering...")
-        sequence_col = duckdb.ColumnExpression("sequence")
-        query_col = duckdb.ColumnExpression("query")
-        extraction_result = con.sql(
-            """--sql
-            SELECT  *, CAST(regexp_matches(sequence, query) AS INT) AS match
-            FROM cartesian_df
-            WHERE match > 0 ;
-            """
-        )
-
-        ic("Filtering out sequences with violation...")
-        filtered_ids = con.sql(
-            """--sql
-                SELECT id, sum(match) AS detection_count_per_sequence
-                FROM  extraction_result
-                GROUP BY id
-                HAVING SUM(match) <= 2;
-                """
-        )
-
-        # Export to parquets
-        ic("Get genuine sequences for export...")
-        filtered_result = con.sql(
-            """--sql
-            SELECT * FROM extraction_result JOIN filtered_ids ON (extraction_result.id = filtered_ids.id);
-            """
-        )
-
-        ic("Export full parquet...")
-        dst = f"{args.system_structure.parquet_dir}/extracted_result.parquet"
-        con.sql(
-            f"""--sql
-            COPY filtered_result TO '{dst}' 
-            (FORMAT 'parquet', COMPRESSION 'zstd', ROW_GROUP_SIZE '100_000');
-            """
-        )
-
-        ic("Export barcode extraction result csv...")
-        read_count_table_path = f"{args.system_structure.result_dir}/filtered_result.csv"
-        con.sql(
-            f"""--sql
-            COPY (
-            SELECT gene, SUM(match) AS read_count
-            FROM read_parquet('{dst}')
-            GROUP BY gene
-            ) TO '{read_count_table_path}' 
-            WITH (FORMAT CSV, HEADER, DELIMITER ',');
-            """
-        )
+        # query_with_sql(args, barcode_df)
         end = datetime.now()
         ic(f"Elapsed time: {end - start} for {sample}+{barcode_path}")
         with open(args.system_structure.result_dir / "processing_time.txt", "w", encoding="utf-8") as f:
@@ -327,6 +276,67 @@ def run_pipeline(args: SimpleNamespace) -> None:
             f.write(f"# {end - start} s elapsed\n")
 
     ic("All merging jobs fired. Waiting for the final result...")
+
+
+def query_with_sql(args, barcode_df):
+    con = duckdb.connect()
+    con.sql("--sql SET enable_progress_bar = true;")
+    ic("Cartesian product generation...")
+    cartesian_df = con.sql(
+        f"SELECT * FROM read_parquet('{args.system_structure.seq_split_dir}/*.parquet') CROSS JOIN (SELECT gene, query FROM barcode_df) AS barcode_df;"
+    )
+
+    # Perform the query using DuckDB and tag truthy for each regular expression
+    ic("regex search & filtering...")
+    sequence_col = duckdb.ColumnExpression("sequence")
+    query_col = duckdb.ColumnExpression("query")
+    extraction_result = con.sql(
+        """--sql
+            SELECT  *, CAST(regexp_matches(sequence, query) AS INT) AS match
+            FROM cartesian_df
+            WHERE match > 0 ;
+            """
+    )
+
+    ic("Filtering out sequences with violation...")
+    filtered_ids = con.sql(
+        """--sql
+                SELECT id, sum(match) AS detection_count_per_sequence
+                FROM  extraction_result
+                GROUP BY id
+                HAVING SUM(match) <= 2;
+                """
+    )
+
+    # Export to parquets
+    ic("Get genuine sequences for export...")
+    filtered_result = con.sql(
+        """--sql
+            SELECT * FROM extraction_result JOIN filtered_ids ON (extraction_result.id = filtered_ids.id);
+            """
+    )
+
+    ic("Export full parquet...")
+    dst = f"{args.system_structure.parquet_dir}/extracted_result.parquet"
+    con.sql(
+        f"""--sql
+            COPY filtered_result TO '{dst}' 
+            (FORMAT 'parquet', COMPRESSION 'zstd', ROW_GROUP_SIZE '100_000');
+            """
+    )
+
+    ic("Export barcode extraction result csv...")
+    read_count_table_path = f"{args.system_structure.result_dir}/filtered_result.csv"
+    con.sql(
+        f"""--sql
+            COPY (
+            SELECT gene, SUM(match) AS read_count
+            FROM read_parquet('{dst}')
+            GROUP BY gene
+            ) TO '{read_count_table_path}' 
+            WITH (FORMAT CSV, HEADER, DELIMITER ',');
+            """
+    )
 
 
 def convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="64MiB"):
