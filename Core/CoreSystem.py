@@ -253,7 +253,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ExtractorRunner(sample, barcode_path, args)  # TODO: refactor its usage to avoid creating an object
         # if not DEBUGGING:
 
-        if convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="1MiB") < 0:
+        if convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="512KiB") < 0:
             raise Exception("FASTQ to parquet conversion failed")
         ic("Generating parquets completed")
 
@@ -314,7 +314,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
             f"""--sql
             COPY (
             SELECT gene, SUM(match) AS read_count
-            FROM filtered_result
+            FROM read_parquet('{dst}')
             GROUP BY gene
             ) TO '{read_count_table_path}' 
             WITH (FORMAT CSV, HEADER, DELIMITER ',');
@@ -322,7 +322,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         )
         end = datetime.now()
         ic(f"Elapsed time: {end - start} for {sample}+{barcode_path}")
-        with open(args.system_structure.project_samples_path, "a", encoding="utf-8") as f:
+        with open(args.system_structure.result_dir / "processing_time.txt", "w", encoding="utf-8") as f:
             f.write(f"{sample},{barcode_path}\n")
             f.write(f"# {end - start} s elapsed\n")
 
