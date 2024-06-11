@@ -7,26 +7,18 @@ from types import SimpleNamespace
 
 from psutil import cpu_count
 
-DEBUGGING = True
+DEBUGGING = False
 N_PHYSICAL_CORES = cpu_count(logical=False)
 
 os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
-import pandas as pd
-from dask import config as dcf
-
-dcf.set(
-    {
-        "dataframe.convert-string": True,
-        # "dataframe.backend": "cudf",
-    }
-)
 import ctypes
 
-import cudf
 import duckdb
+import pandas as pd
 from dask import bag as db
+from dask import config as dcf
+from dask import dataframe as dd
 from dask.distributed import Client, LocalCluster
-from dask_cuda import LocalCUDACluster
 from icecream import ic
 from tqdm import tqdm
 
@@ -153,8 +145,8 @@ class SystemStructure(object):
         self.output_sample_organizer[sample_name] = Helper.mkdir_if_not(self.output_dir / barcode_name / sample_name)
         self.result_dir = Helper.mkdir_if_not(self.output_sample_organizer[sample_name])
         self.parquet_dir = Helper.mkdir_if_not(self.result_dir / "parquets")
-        # self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
-        # self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
+        self.full_mat_dir = Helper.mkdir_if_not(self.result_dir / "full_matrix")
+
         if not DEBUGGING:
             if len(os.listdir(f"{pathlib.Path.cwd() / self.parquet_dir}")) > 0:
                 sp.run(
@@ -165,11 +157,6 @@ class SystemStructure(object):
                     ]
                 )
                 self.parquet_dir = Helper.mkdir_if_not(self.result_dir / "parquets")  # Re-create the directory
-
-
-# TODO: FLASh integration? https://ccb.jhu.edu/software/FLASH/
-def fastp_integration():
-    pass
 
 
 class ExtractorRunner:
@@ -232,42 +219,42 @@ def system_struct_checker(func):
 
 @system_struct_checker
 def run_pipeline(args: SimpleNamespace) -> None:
-
-    # TODO: time benchmarking
     # TODO: add parquet remove option
-    ic("Initilaizing local CPU cluster...")
     cpu_cluster = LocalCluster(
         processes=True,
-        n_workers=N_PHYSICAL_CORES,  # DEBUG
+        # n_workers=1,  # DEBUG
+        n_workers=N_PHYSICAL_CORES,
         # threads_per_worker=2,
         dashboard_address=":40928",
         local_directory="./tmp",
     )
-    cpu_client = Client(cpu_cluster)
-    ic(cpu_client)
-    ic(cpu_client.dashboard_link)
-
-    ic("Initializing local GPU cluster...")
-    gpu_cluster = LocalCUDACluster(dashboard_address=":40929")
-    gpu_client = Client(gpu_cluster)
-    ic(gpu_client)
-    ic(gpu_client.dashboard_link)
 
     for sample, barcode_path in tqdm(args.samples):
         start = datetime.now()
+        ic("Initilaizing local CPU cluster...")
+        cpu_client = Client(cpu_cluster)
+        ic(cpu_client)
+        ic(cpu_client.dashboard_link)
         ExtractorRunner(sample, barcode_path, args)  # TODO: refactor its usage to avoid creating an object
         # if not DEBUGGING:
 
-        if convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="512KiB") < 0:
+        if convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="64MiB") < 0:
             raise Exception("FASTQ to parquet conversion failed")
         ic("Generating parquets completed")
 
         # END: DEBUGGING
         ic("Loading barcodes...")
         barcode_df = load_barcode_file(barcode_path, args)
-        barcode_df = cudf.from_pandas(barcode_df)
 
-        # Read partitioned parquets with duckdb
+        # Query with embedded cudf
+        # ic("Initializing local GPU cluster...")
+        # gpu_cluster = LocalCUDACluster(dashboard_address=":40929")
+        # gpu_client = Client(gpu_cluster)
+        # ic(gpu_client)
+        # ic(gpu_client.dashboard_link)
+        query_with_gpu(args, barcode_df, cpu_client)
+
+        # Query with embedded SQL
         # query_with_sql(args, barcode_df)
         end = datetime.now()
         ic(f"Elapsed time: {end - start} for {sample}+{barcode_path}")
@@ -278,7 +265,68 @@ def run_pipeline(args: SimpleNamespace) -> None:
     ic("All merging jobs fired. Waiting for the final result...")
 
 
+def query_with_gpu(args, barcode_df, cpu_client):
+    # TODO: improve job submission design using cpu_client and cudf directly
+    dcf.set(
+        {
+            "dataframe.convert-string": True,
+            "dataframe.backend": "cudf",
+        }
+    )
+    parquet_df = dd.read_parquet(args.system_structure.seq_split_dir, engine="pyarrow")
+
+    # futures = []
+    # for query_tup in barcode_df[["gene", "query"]].itertuples(index=False):
+
+    #     f = cpu_client.submit(save_matching_sequences, args, parquet_df, query_tup)
+    #     futures.append(f)
+
+    # if -1 in cpu_client.gather(futures):
+    #     ic("Error in saving matching sequences")
+    #     raise Exception("Error in saving matching sequences")
+
+    ic("Export full parquet...")
+    extraction_result = dd.read_parquet(  # Memory blows up, I don't know how to Dask can handle it properly
+        args.system_structure.full_mat_dir,
+        aggregate_files="section",
+    )
+
+    ic("Filtering out sequences with violation...")
+    detection_count = extraction_result.groupby("id")["match"].sum().reset_index()
+    filtered_id_df = detection_count[detection_count["match"] <= 2]
+    filtered_id_df = filtered_id_df.assign(temp=-1)
+    filtered_result = extraction_result.merge(filtered_id_df[["id", "temp"]], on="id", how="inner").drop(
+        columns=["temp"]
+    )
+    filtered_result["gene"] = filtered_result["gene"].astype("str")
+
+    filtered_result.to_parquet(args.system_structure.parquet_dir, compression="snappy", overwrite=True)
+
+    ic("Export barcode extraction result csv...")
+    read_count = dd.read_parquet(args.system_structure.parquet_dir).groupby("gene")["match"].sum().reset_index()
+    read_count_table_path = f"{args.system_structure.result_dir}/filtered_result.csv"
+    read_count.compute().to_csv(read_count_table_path, index=False)
+
+
+def save_matching_sequences(args, parquet_df, query_tup):
+    try:
+        parquet_df["match"] = parquet_df["sequence"].str.contains(query_tup.query, regex=True)
+        parquet_df["gene"] = query_tup.gene
+        parquet_df = parquet_df[parquet_df["match"] > 0]  # Remove non-matching sequences
+        parquet_df.to_parquet(
+            args.system_structure.full_mat_dir / f"gene={query_tup.gene}/",
+            compression="snappy",
+            overwrite=True,
+        )
+
+        return 0
+    except Exception as e:
+        ic(e)
+        return -1
+
+
 def query_with_sql(args, barcode_df):
+    # TODO : Improve query design
     con = duckdb.connect()
     con.sql("--sql SET enable_progress_bar = true;")
     ic("Cartesian product generation...")
@@ -374,7 +422,7 @@ def convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="64
         sequence_ddf.to_parquet(
             f"{args.system_structure.seq_split_dir}",
             engine="pyarrow",
-            # write_index=True,
+            write_index=True,
             write_metadata_file=True,
             compute=True,
         )
