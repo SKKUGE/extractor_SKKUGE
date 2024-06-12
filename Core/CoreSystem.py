@@ -5,11 +5,10 @@ import sys
 from datetime import datetime
 from types import SimpleNamespace
 
-from psutil import cpu_count
-
 DEBUGGING = False
-N_PHYSICAL_CORES = cpu_count(logical=False)
-
+N_PHYSICAL_CORES = 16  # cpu_count(logical=False)
+BLOCK_SIZE = "64MiB"
+PER_PROCESS_MEMORY = "6GB"
 os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
 import ctypes
 
@@ -24,6 +23,14 @@ from tqdm import tqdm
 
 ic.configureOutput(prefix=f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | ")
 ic.configureOutput(includeContext=True)
+
+dcf.set(
+    {
+        "dataframe.convert-string": True,
+        "dataframe.backend": "cudf",
+        "array.backend": "cupy",
+    }
+)
 
 
 def trim_memory() -> int:
@@ -227,6 +234,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         # threads_per_worker=2,
         dashboard_address=":40928",
         local_directory="./tmp",
+        memory_limit=PER_PROCESS_MEMORY,
     )
 
     for sample, barcode_path in tqdm(args.samples):
@@ -238,7 +246,7 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ExtractorRunner(sample, barcode_path, args)  # TODO: refactor its usage to avoid creating an object
         # if not DEBUGGING:
 
-        if convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="64MiB") < 0:
+        if convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize=BLOCK_SIZE) < 0:
             raise Exception("FASTQ to parquet conversion failed")
         ic("Generating parquets completed")
 
@@ -246,16 +254,8 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ic("Loading barcodes...")
         barcode_df = load_barcode_file(barcode_path, args)
 
-        # Query with embedded cudf
-        # ic("Initializing local GPU cluster...")
-        # gpu_cluster = LocalCUDACluster(dashboard_address=":40929")
-        # gpu_client = Client(gpu_cluster)
-        # ic(gpu_client)
-        # ic(gpu_client.dashboard_link)
         query_with_gpu(args, barcode_df, cpu_client)
 
-        # Query with embedded SQL
-        # query_with_sql(args, barcode_df)
         end = datetime.now()
         ic(f"Elapsed time: {end - start} for {sample}+{barcode_path}")
         with open(args.system_structure.result_dir / "processing_time.txt", "w", encoding="utf-8") as f:
@@ -266,29 +266,22 @@ def run_pipeline(args: SimpleNamespace) -> None:
 
 
 def query_with_gpu(args, barcode_df, cpu_client):
-    # TODO: improve job submission design using cpu_client and cudf directly
-    dcf.set(
-        {
-            "dataframe.convert-string": True,
-            "dataframe.backend": "cudf",
-        }
-    )
+
     parquet_df = dd.read_parquet(args.system_structure.seq_split_dir, engine="pyarrow")
 
-    # futures = []
-    # for query_tup in barcode_df[["gene", "query"]].itertuples(index=False):
+    futures = []
+    for query_tup in tqdm(barcode_df[["gene", "query"]].itertuples(index=False)):
 
-    #     f = cpu_client.submit(save_matching_sequences, args, parquet_df, query_tup)
-    #     futures.append(f)
+        f = cpu_client.submit(save_matching_sequences, args, parquet_df, query_tup)
+        futures.append(f)
 
-    # if -1 in cpu_client.gather(futures):
-    #     ic("Error in saving matching sequences")
-    #     raise Exception("Error in saving matching sequences")
+    if -1 in cpu_client.gather(futures):
+        ic("Error in saving matching sequences")
+        raise Exception("Error in saving matching sequences")
 
     ic("Export full parquet...")
     extraction_result = dd.read_parquet(  # Memory blows up, I don't know how to Dask can handle it properly
         args.system_structure.full_mat_dir,
-        aggregate_files="section",
     )
 
     ic("Filtering out sequences with violation...")
@@ -315,7 +308,6 @@ def save_matching_sequences(args, parquet_df, query_tup):
         parquet_df = parquet_df[parquet_df["match"] > 0]  # Remove non-matching sequences
         parquet_df.to_parquet(
             args.system_structure.full_mat_dir / f"gene={query_tup.gene}/",
-            compression="snappy",
             overwrite=True,
         )
 
