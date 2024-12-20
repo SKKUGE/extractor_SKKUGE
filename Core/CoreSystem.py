@@ -2,15 +2,16 @@ import os
 import pathlib
 import subprocess as sp
 import sys
+import traceback
 from datetime import datetime
 from types import SimpleNamespace
 
 DEBUGGING = False
 N_PHYSICAL_CORES = 16  # cpu_count(logical=False)
 BLOCK_SIZE = "64MiB"
-PER_PROCESS_MEMORY = "6GB"
-os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
-import ctypes
+PARTITION_SIZE = "128MiB"  # 3090 - 24GB VRAM: 128MiB for ~ 22GB source data
+PER_PROCESS_MEMORY = "4GB"
+# os.environ["MALLOC_TRIM_THRESHOLD_"] = "65536"
 
 import duckdb
 import pandas as pd
@@ -33,9 +34,9 @@ dcf.set(
 )
 
 
-def trim_memory() -> int:
-    libc = ctypes.CDLL("libc.so.6")
-    return libc.malloc_trim(0)
+# def trim_memory() -> int:
+#     libc = ctypes.CDLL("libc.so.6")
+#     return libc.malloc_trim(0)
 
 
 def finalize(
@@ -229,12 +230,12 @@ def run_pipeline(args: SimpleNamespace) -> None:
     # TODO: add parquet remove option
     cpu_cluster = LocalCluster(
         processes=True,
-        # n_workers=1,  # DEBUG
-        n_workers=N_PHYSICAL_CORES,
-        # threads_per_worker=2,
         dashboard_address=":40928",
         local_directory="./tmp",
-        memory_limit=PER_PROCESS_MEMORY,
+        # n_workers=1,  # DEBUG
+        # n_workers=N_PHYSICAL_CORES,
+        # threads_per_worker=2,
+        # memory_limit=PER_PROCESS_MEMORY,
     )
 
     for sample, barcode_path in tqdm(args.samples):
@@ -244,16 +245,21 @@ def run_pipeline(args: SimpleNamespace) -> None:
         ic(cpu_client)
         ic(cpu_client.dashboard_link)
         ExtractorRunner(sample, barcode_path, args)  # TODO: refactor its usage to avoid creating an object
-        # if not DEBUGGING:
 
-        if convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize=BLOCK_SIZE) < 0:
+        if (
+            convert_fastq_into_splitted_parquets(
+                args, cpu_client, sample, blocksize=BLOCK_SIZE, partition_size=PARTITION_SIZE
+            )
+            < 0
+        ):
             raise Exception("FASTQ to parquet conversion failed")
+        # END: DEBUGGING
         ic("Generating parquets completed")
 
-        # END: DEBUGGING
         ic("Loading barcodes...")
-        barcode_df = load_barcode_file(barcode_path, args)
+        barcode_df = pd.read_csv(barcode_path, sep=args.sep)
 
+        ic("Query with GPU...")
         query_with_gpu(args, barcode_df, cpu_client)
 
         end = datetime.now()
@@ -262,25 +268,69 @@ def run_pipeline(args: SimpleNamespace) -> None:
             f.write(f"{sample},{barcode_path}\n")
             f.write(f"# {end - start} s elapsed\n")
 
+    cpu_client.close()
     ic("All merging jobs fired. Waiting for the final result...")
+
+
+# Define a function to apply regex patterns using cuDF
+def _gpu_apply_regex_patterns(df_chunk, barcode_df, save_path):
+    # Adapted to Prime editing system
+    try:
+        df_chunk["primary_class"] = None  # Default
+        df_chunk["edit_type"] = "Others"  # Default
+
+        for query in barcode_df.itertuples():
+
+            barcode_idx = df_chunk["sequence"].str.contains(query.Barcode, regex=True)
+            df_chunk.loc[barcode_idx, "primary_class"] = query.Name
+
+            if barcode_idx.sum() > 0:  # If there is a match
+                unedited_idx = df_chunk["sequence"].str.contains(query.Unedited, regex=True) & barcode_idx  # Unedited
+                edited_idx = df_chunk["sequence"].str.contains(query.Edited, regex=True) & barcode_idx  # Edited
+                df_chunk.loc[unedited_idx, "edit_type"] = "Unedited"
+                df_chunk.loc[edited_idx, "edit_type"] = "Edited"
+
+        # Filter out the unmatched sequences
+        df_chunk = df_chunk[df_chunk["primary_class"].notnull()]
+
+        # Save the matched
+        try:
+            df_chunk.to_parquet(
+                str(save_path),  # Name and Barcode are 1:1
+                # overwrite=True,
+                partition_cols=[
+                    "primary_class",
+                    "edit_type",
+                ],
+            )
+        except IndexError:
+            if df_chunk.empty:
+                ic("Empty dataframe")
+            else:
+                raise Exception("Error in saving matching sequences")
+
+        return 0
+    except Exception as e:
+        ic(e)
+        ic(traceback.format_exc())
+        return -1
 
 
 def query_with_gpu(args, barcode_df, cpu_client):
 
-    parquet_df = dd.read_parquet(args.system_structure.seq_split_dir, engine="pyarrow")
-
-    futures = []
-    for query_tup in tqdm(barcode_df[["gene", "query"]].itertuples(index=False)):
-
-        f = cpu_client.submit(save_matching_sequences, args, parquet_df, query_tup)
-        futures.append(f)
+    parquet_df = dd.read_parquet(args.system_structure.seq_split_dir)
+    futures = parquet_df.map_partitions(
+        lambda df: _gpu_apply_regex_patterns(df, barcode_df, args.system_structure.full_mat_dir),
+        #         Exception has occurred: AttributeError
+        # 'bool' object has no attribute 'any'
+    )
 
     if -1 in cpu_client.gather(futures):
         ic("Error in saving matching sequences")
         raise Exception("Error in saving matching sequences")
 
     ic("Export full parquet...")
-    extraction_result = dd.read_parquet(  # Memory blows up, I don't know how to Dask can handle it properly
+    extraction_result = dd.read_parquet(  # BUG: Memory blows up, I don't know how to Dask can handle it properly
         args.system_structure.full_mat_dir,
     )
 
@@ -302,6 +352,8 @@ def query_with_gpu(args, barcode_df, cpu_client):
 
 
 def save_matching_sequences(args, parquet_df, query_tup):
+    # Need to reduce query size to consider wall time (single-combined query -> multiple queries and multiple detection status)
+
     try:
         parquet_df["match"] = parquet_df["sequence"].str.contains(query_tup.query, regex=True)
         parquet_df["gene"] = query_tup.gene
@@ -379,7 +431,7 @@ def query_with_sql(args, barcode_df):
     )
 
 
-def convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="64MiB"):
+def convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="64MiB", partition_size="1GiB"):
     """
 
     Convert a FASTQ file into splitted parquet files.
@@ -408,7 +460,7 @@ def convert_fastq_into_splitted_parquets(args, cpu_client, sample, blocksize="64
         sequence_ddf = sequence_da.to_dask_dataframe(
             columns=["id", "sequence", "separator", "quality"],
         )
-        sequence_ddf = sequence_ddf.drop(columns=["separator"])
+        sequence_ddf = sequence_ddf.drop(columns=["separator"]).repartition(partition_size=partition_size)
 
         ic("Save raw NGS reads as parquets...")
         sequence_ddf.to_parquet(
@@ -435,27 +487,28 @@ def load_barcode_file(barcode_path, args):
     Returns:
         pd.DataFrame: The processed barcode dataframe.
     """
-    ic("Loading barcode file...")
-    barcode_df = pd.read_csv(
-        barcode_path,
-        sep=args.sep,
-        header=None,
-    ).fillna("")
-    barcode_df.columns = ["gene"] + [
-        f"barcode_{i}" for i in range(1, len(barcode_df.columns))
-    ]  # Support for n-th barcode
+    # barcode_df = pd.read_csv(
+    #     barcode_path,
+    #     sep=args.sep,
+    #     header=None,
+    # ).fillna("")
+    # barcode_df.columns = ["gene"] + [
+    #     f"barcode_{i}" for i in range(1, len(barcode_df.columns))
+    # ]  # Support for n-th barcode
 
-    if not barcode_df["gene"].is_unique:  # Weak assertion: gene names are unique as it is used as PK
-        ic("Gene names are not unique")
-        ic(barcode_df["gene"].duplicated())
-        ic("Drop duplicated gene names...")
-        barcode_df = barcode_df.drop_duplicates(subset="Gene")
+    # if not barcode_df["gene"].is_unique:  # Weak assertion: gene names are unique as it is used as PK
+    #     ic("Gene names are not unique")
+    #     ic(barcode_df["gene"].duplicated())
+    #     ic("Drop duplicated gene names...")
+    #     barcode_df = barcode_df.drop_duplicates(subset="Gene")
 
-    barcode_df.loc[:, ["barcode" in col for col in barcode_df.columns]].transform(lambda x: x.str.upper())
-    barcode_df["query"] = barcode_df.loc[:, ["barcode" in col for col in barcode_df.columns]].apply(
-        lambda x: ".*".join(x), axis=1
-    )
-    if not barcode_df["query"].is_unique:
-        ic("Warning: Duplicated barcode sequences are detected. Please check the barcode file.")
+    # barcode_df.loc[:, ["barcode" in col for col in barcode_df.columns]].transform(lambda x: x.str.upper())
+    # barcode_df["query"] = barcode_df.loc[:, ["barcode" in col for col in barcode_df.columns]].apply(
+    #     lambda x: ".*".join(x), axis=1
+    # )
+    # if not barcode_df["query"].is_unique:
+    #     ic("Warning: Duplicated barcode sequences are detected. Please check the barcode file.")
 
-    return barcode_df
+    # return barcode_df
+
+    pass  # Barcode_v2
